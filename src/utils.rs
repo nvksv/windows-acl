@@ -281,8 +281,8 @@ pub struct SecurityDescriptor {
     /// Pointer to the system access control list in the security descriptor
     pub pSacl: PACL,
 
-    psidOwner: PSID,
-    psidGroup: PSID,
+    pub psidOwner: PSID,
+    pub psidGroup: PSID,
 }
 
 impl SecurityDescriptor {

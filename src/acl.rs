@@ -864,6 +864,22 @@ impl ACL {
         self.object_type
     }
 
+    pub fn owner(&self) -> Option<&PSID> {
+        let owner = &self.descriptor.as_ref()?.psidOwner;
+        if (*owner).is_null() {
+            return None;
+        };
+        Some(owner)
+    }
+
+    pub fn group(&self) -> Option<&PSID> {
+        let group = &self.descriptor.as_ref()?.psidGroup;
+        if (*group).is_null() {
+            return None;
+        };
+        Some(group)
+    }
+
     /// Returns a `Vec<ACLEntry>` of access control list entries for the specified named object path.
     pub fn all(&self) -> Result<Vec<ACLEntry>, DWORD> {
         let mut callback = AllEntryCallback {
