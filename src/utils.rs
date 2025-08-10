@@ -2,36 +2,53 @@
 
 #![allow(non_snake_case)]
 
-use std::ffi::OsStr;
+use std::ffi::{c_void, OsStr};
 use std::iter::once;
 use std::mem;
 use std::ops::Drop;
 use std::os::windows::ffi::OsStrExt;
+use std::ptr::null_mut;
 use widestring::WideString;
-use winapi::shared::minwindef::{BYTE, DWORD, FALSE, HLOCAL, PDWORD};
-use winapi::shared::ntdef::{HANDLE, LPCWSTR, LPWSTR, NULL, WCHAR};
-use winapi::shared::sddl::{ConvertSidToStringSidW, ConvertStringSidToSidW};
-use winapi::shared::winerror::{ERROR_INSUFFICIENT_BUFFER, ERROR_NOT_ALL_ASSIGNED, ERROR_SUCCESS};
+// use windows_strings::*;
+// use winapi::shared::minwindef::{BYTE, DWORD, FALSE, HLOCAL, PDWORD};
+// use winapi::shared::ntdef::{HANDLE, LPCWSTR, LPWSTR, NULL, WCHAR};
+use windows::core::{Result, Error, PWSTR};
+use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NOT_ALL_ASSIGNED, ERROR_SUCCESS};
 
 #[allow(unused_imports)]
-use winapi::um::accctrl::{
+use windows::Win32::Security::Authorization::{
     SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
     SE_SERVICE,
-};
-use winapi::um::aclapi::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, SetSecurityInfo,
 };
-use winapi::um::errhandlingapi::{GetLastError, SetLastError};
-use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
-use winapi::um::securitybaseapi::{AdjustTokenPrivileges, CopySid, GetLengthSid};
-use winapi::um::winbase::{GetUserNameW, LocalFree, LookupAccountNameW, LookupPrivilegeValueW};
-use winapi::um::winnt::{
+use windows::Win32::Foundation::{
+    HLOCAL, GetLastError, SetLastError, LocalFree,
+    CloseHandle, INVALID_HANDLE_VALUE};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows::Win32::Security::{
+    AdjustTokenPrivileges, CopySid, GetLengthSid, LookupAccountNameW, LookupPrivilegeValueW,
     DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-    OWNER_SECURITY_INFORMATION, PACL, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    PSID, PTOKEN_PRIVILEGES, SACL_SECURITY_INFORMATION, SE_PRIVILEGE_ENABLED, SID_NAME_USE,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    PSID, SACL_SECURITY_INFORMATION, SE_PRIVILEGE_ENABLED, SID_NAME_USE,
     TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
+use windows::Win32::System::WindowsProgramming::{GetUserNameW};
+
+#[inline(always)]
+pub(crate) fn as_pvoid_mut<T>( r: &mut T ) -> *mut c_void {
+    r as *mut _ as *mut c_void
+}
+
+#[inline(always)]
+pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
+    r as *mut _ as *mut *mut c_void
+}
+
+// #[inline(always)]
+// pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
+//     r as *mut _ as *mut *mut c_void
+// }
 
 /// Converts a raw SID into a SID string representation.
 ///
@@ -40,20 +57,16 @@ use winapi::um::winnt::{
 ///
 /// # Errors
 /// On error, a Windows error code is returned with the `Err` type.
-pub unsafe fn sid_to_string(sid: PSID) -> Result<String, DWORD> {
-    let mut raw_string_sid: LPWSTR = NULL as LPWSTR;
-    if unsafe { ConvertSidToStringSidW(sid, &mut raw_string_sid) } == 0
-        || raw_string_sid == (NULL as LPWSTR)
-    {
-        return Err(unsafe { GetLastError() });
+pub unsafe fn sid_to_string(sid: PSID) -> Result<String> {
+    let mut raw_string_sid: PWSTR = PWSTR::null();
+    unsafe { ConvertSidToStringSidW(sid, &mut raw_string_sid) }?;
+    if raw_string_sid.is_null() {
+        return Err(Error::empty());
     }
 
-    let raw_string_sid_len = unsafe { libc::wcslen(raw_string_sid) };
-    let sid_string = unsafe { WideString::from_ptr(raw_string_sid, raw_string_sid_len) };
+    unsafe { LocalFree(Some(HLOCAL(raw_string_sid.as_ptr() as *mut _))) };
 
-    unsafe { LocalFree(raw_string_sid as HLOCAL) };
-
-    Ok(sid_string.to_string_lossy())
+    raw_string_sid.to_string().map_err(|_| Error::empty())
 }
 
 /// Resolves a system username (either in the format of "user" or "DOMAIN\user") into a raw SID. The raw SID
@@ -68,24 +81,25 @@ pub unsafe fn sid_to_string(sid: PSID) -> Result<String, DWORD> {
 ///
 /// **Note**: If the error code is 0, `GetLastError()` returned `ERROR_INSUFFICIENT_BUFFER` after invoking `LookupAccountNameW` or
 ///         the `sid_size` is 0.
-pub fn name_to_sid(name: &str, system: Option<&str>) -> Result<Vec<BYTE>, DWORD> {
-    let raw_name: Vec<u16> = OsStr::new(name).encode_wide().chain(once(0)).collect();
-    let raw_system: Option<Vec<u16>> =
-        system.map(|name| OsStr::new(name).encode_wide().chain(once(0)).collect());
-    let system_ptr: LPCWSTR = match raw_system {
-        Some(sys_name) => sys_name.as_ptr(),
-        None => NULL as LPCWSTR,
-    };
-    let mut sid_size: DWORD = 0;
-    let mut sid_type: SID_NAME_USE = 0 as SID_NAME_USE;
+pub fn name_to_sid(name: &str, system: Option<&str>) -> Result<Vec<u8>> {
+    let name: Vec<u16> = OsStr::new(name).encode_wide().chain(once(0)).collect();
+    let name = PWSTR::from_raw(name.as_mut_ptr());
 
-    let mut name_size: DWORD = 0;
+    let system: Option<Vec<u16>> =
+        system.map(|name| OsStr::new(name).encode_wide().chain(once(0)).collect());
+    let system: Option<PWSTR> = system.as_mut()
+        .map( |system| PWSTR::from_raw(system.as_mut_ptr()));
+
+        let mut sid_size: u32 = 0;
+    let mut sid_type: SID_NAME_USE = SID_NAME_USE(0);
+
+    let mut name_size: u32 = 0;
 
     if unsafe {
         LookupAccountNameW(
-            system_ptr,
-            raw_name.as_ptr() as LPCWSTR,
-            NULL as PSID,
+            system,
+            Some(raw_name.as_ptr() as LPCWSTR),
+            None,
             &mut sid_size,
             NULL as LPWSTR,
             &mut name_size,
