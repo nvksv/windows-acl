@@ -7,7 +7,7 @@ use core::{
     ffi::c_void,
     ptr::{null_mut},
 };
-use crate::utils::{sid_to_string, SDSource, SecurityDescriptor, vec_as_psid};
+use crate::utils::{vec_as_pacl, vec_as_pacl_mut, SDSource, SecurityDescriptor, vec_as_psid};
 use std::{
     fmt,
     mem,
@@ -44,114 +44,19 @@ use windows::{
             SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, 
             SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
         },
+        Storage::FileSystem::{
+            FILE_GENERIC_READ, FILE_GENERIC_EXECUTE, SYNCHRONIZE, FILE_ALL_ACCESS, FILE_ACCESS_RIGHTS,
+        }
     },
 };
 
-use crate::utils::{as_pvoid_mut, as_ppvoid_mut};
+use crate::{
+    utils::{as_pvoid_mut, as_ppvoid_mut},
+    types::*,
+    sid::SID,
+    acl_entry::ACLEntry,
+};
 
-/// This enum is almost a direct mapping with the values described in
-/// [SE_OBJECT_TYPE](https://docs.microsoft.com/en-us/windows/desktop/api/accctrl/ne-accctrl-_se_object_type)
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ObjectType {
-    Unknown = 0,
-    FileObject,
-    ServiceObject,
-    PrinterObject,
-    RegistryKey,
-    LmShare,
-    KernelObject,
-    WindowObject,
-    DsObject,
-    DsObjectAll,
-    ProviderDefinedObject,
-    WmiGuidObject,
-    RegistryWow6432Key,
-}
-
-impl From<ObjectType> for SE_OBJECT_TYPE {
-    fn from(obj_type: ObjectType) -> Self {
-        match obj_type {
-            ObjectType::FileObject => SE_FILE_OBJECT,
-            ObjectType::ServiceObject => SE_SERVICE,
-            ObjectType::PrinterObject => SE_PRINTER,
-            ObjectType::RegistryKey => SE_REGISTRY_KEY,
-            ObjectType::LmShare => SE_LMSHARE,
-            ObjectType::KernelObject => SE_KERNEL_OBJECT,
-            ObjectType::WindowObject => SE_WINDOW_OBJECT,
-            ObjectType::DsObject => SE_DS_OBJECT,
-            ObjectType::DsObjectAll => SE_DS_OBJECT_ALL,
-            ObjectType::ProviderDefinedObject => SE_PROVIDER_DEFINED_OBJECT,
-            ObjectType::WmiGuidObject => SE_WMIGUID_OBJECT,
-            ObjectType::RegistryWow6432Key => SE_REGISTRY_WOW64_32KEY,
-            _ => SE_UNKNOWN_OBJECT_TYPE,
-        }
-    }
-}
-
-impl From<SE_OBJECT_TYPE> for ObjectType {
-    fn from(obj_type: SE_OBJECT_TYPE) -> Self {
-        match obj_type {
-            SE_FILE_OBJECT => ObjectType::FileObject,
-            SE_SERVICE => ObjectType::ServiceObject,
-            SE_PRINTER => ObjectType::PrinterObject,
-            SE_REGISTRY_KEY => ObjectType::RegistryKey,
-            SE_LMSHARE => ObjectType::LmShare,
-            SE_KERNEL_OBJECT => ObjectType::KernelObject,
-            SE_WINDOW_OBJECT => ObjectType::WindowObject,
-            SE_DS_OBJECT => ObjectType::DsObject,
-            SE_DS_OBJECT_ALL => ObjectType::DsObjectAll,
-            SE_PROVIDER_DEFINED_OBJECT => ObjectType::ProviderDefinedObject,
-            SE_WMIGUID_OBJECT => ObjectType::WmiGuidObject,
-            SE_REGISTRY_WOW64_32KEY => ObjectType::RegistryWow6432Key,
-            _ => ObjectType::Unknown,
-        }
-    }
-}
-
-/// This enum is a almost direct mapping with the values described under `AceType` in
-/// [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AceType {
-    Unknown = 0,
-    AccessAllow = 1,
-    AccessAllowCallback,
-    AccessAllowObject,
-    AccessAllowCallbackObject,
-    AccessDeny = 5,
-    AccessDenyCallback,
-    AccessDenyObject,
-    AccessDenyCallbackObject,
-    SystemAudit = 9,
-    SystemAuditCallback,
-    SystemAuditObject,
-    SystemAuditCallbackObject,
-    SystemMandatoryLabel = 13,
-    SystemResourceAttribute,
-}
-
-/// `ACLEntry` represents a single access control entry in an access control list
-pub struct ACLEntry {
-    /// The index of the current entry in the raw access control list
-    pub index: u16,
-
-    /// The entry's type
-    pub entry_type: AceType,
-
-    /// The calculated size of the current access control entry
-    pub entry_size: u32,
-
-    /// See `AceSize` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
-    pub size: u16,
-
-    /// See `AceFlags` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
-    pub flags: ACE_FLAGS,
-
-    /// See [ACCESS_MASK](https://docs.microsoft.com/en-us/windows/desktop/secauthz/access-mask)
-    pub mask: u32,
-
-    /// The target entity's raw SID
-    pub sid: Option<Vec<u16>>,
-}
 
 /// `ACL` represents the access control list (discretionary or oth discretionary/system) for a named object
 #[derive(Debug)]
@@ -162,90 +67,6 @@ pub struct ACL {
     object_type: ObjectType,
 }
 
-#[allow(dead_code)]
-impl ACLEntry {
-    /// Returns an `ACLEntry` object with default values.
-    pub fn new() -> ACLEntry {
-        ACLEntry {
-            index: 0,
-            entry_type: AceType::Unknown,
-            entry_size: 0,
-            size: 0,
-            flags: ACE_FLAGS(0),
-            mask: 0,
-            sid: None,
-        }
-    }
-
-    /// The target entity's SID in string representation
-    pub fn string_sid(&self) -> Result<Option<String>> {
-        Ok(
-            match self.psid() {
-                Some(psid) => {
-                    Some(
-                        unsafe {sid_to_string(psid)}?
-                    )
-                },
-                None => {
-                    None
-                }
-            }
-        )
-    }
-
-    fn psid(&self) -> Option<PSID> {
-        match self.sid.as_ref() {
-            Some(sid) => Some(PSID(sid.as_ptr() as *mut _)),
-            None => None,
-        }
-    }
-
-}
-
-impl fmt::Display for ObjectType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let obj_type = match *self {
-            ObjectType::Unknown => "Unknown",
-            ObjectType::FileObject => "FileObject",
-            ObjectType::ServiceObject => "ServiceObject",
-            ObjectType::PrinterObject => "PrinterObject",
-            ObjectType::RegistryKey => "RegistryKey",
-            ObjectType::LmShare => "LmShare",
-            ObjectType::KernelObject => "KernelObject",
-            ObjectType::WindowObject => "WindowObject",
-            ObjectType::DsObject => "DsObject",
-            ObjectType::DsObjectAll => "DsObjectAll",
-            ObjectType::ProviderDefinedObject => "ProviderDefinedObject",
-            ObjectType::WmiGuidObject => "WmiGuidObject",
-            ObjectType::RegistryWow6432Key => "RegistryWow6432Key",
-        };
-        write!(f, "{}", obj_type)
-    }
-}
-
-impl fmt::Display for AceType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let entry_type = match *self {
-            AceType::Unknown => "Unknown",
-            AceType::AccessAllow => "AccessAllow",
-            AceType::AccessAllowCallback => "AccessAllowCallback",
-            AceType::AccessAllowObject => "AccessAllowObject",
-            AceType::AccessAllowCallbackObject => "AccessAllowCallbackObject",
-            AceType::AccessDeny => "AccessDeny",
-            AceType::AccessDenyCallback => "AccessDenyCallback",
-            AceType::AccessDenyObject => "AccessDenyObject",
-            AceType::AccessDenyCallbackObject => "AccessDenyCallbackObject",
-            AceType::SystemAudit => "SystemAudit",
-            AceType::SystemAuditCallback => "SystemAuditCallback",
-            AceType::SystemAuditObject => "SystemAuditObject",
-            AceType::SystemAuditCallbackObject => "SystemAuditCallbackObject",
-            AceType::SystemMandatoryLabel => "SystemMandatoryLabel",
-            AceType::SystemResourceAttribute => "SystemResourceAttribute",
-        };
-        write!(f, "{}", entry_type)
-    }
-}
-
 macro_rules! process_entry {
     ($entry: ident, $typ: path, $ptr: ident => $cls: path) => {
         {
@@ -253,98 +74,94 @@ macro_rules! process_entry {
             let sid_offset = offset_of!($cls, SidStart);
             let pSid: PSID = PSID(entry_ptr.wrapping_byte_add(sid_offset) as *mut _);
 
-            $entry.mask = unsafe { (*entry_ptr).Mask};
-
-            if unsafe { IsValidSid(pSid) }.as_bool() {
-                let size = unsafe { GetLengthSid(pSid) };
-                let mut sid: Vec<u16> = Vec::with_capacity(size as usize);
-
-                unsafe { CopySid(size, PSID(sid.as_mut_ptr() as *mut _), pSid) }?;
-                let sid_ptr = PSID(sid.as_ptr() as *mut _);
-
-                let sid_length = unsafe { GetLengthSid(sid_ptr) };
-                debug_assert!( sid_length == size );
-
-                // NOTE(andy): This calculation needs double checking but should be correct...
-                $entry.entry_size = (mem::size_of::<$cls>() as u32) -
-                                    (mem::size_of::<u32>() as u32) +
-                                    sid_length;
-
-                $entry.sid = Some(sid);
-                $entry.entry_type = $typ;
-                $entry.size = unsafe { (*$ptr).AceSize };
-                $entry.flags = ACE_FLAGS(unsafe { (*$ptr).AceFlags } as u32);
-            }
+            $entry.entry_type = $typ;
+            $entry.mask = FILE_ACCESS_RIGHTS(unsafe { (*entry_ptr).Mask });
+            $entry.size = unsafe { (*$ptr).AceSize };
+            $entry.flags = ACE_FLAGS(unsafe { (*$ptr).AceFlags } as u32);
+            $entry.sid = SID::from_psid(pSid)?;
         }
     };
 }
 
+enum EntryCallbackResult {
+    Continue,
+    Break,
+}
+
 trait EntryCallback {
-    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<bool>;
+    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult>;
 }
 
 fn acl_size(pacl: *const _ACL) -> Result<u32> {
+    if pacl.is_null() {
+        return Ok(mem::size_of::<_ACL>() as u32);
+    }
+
     let mut si: ACL_SIZE_INFORMATION = unsafe { mem::zeroed::<ACL_SIZE_INFORMATION>() };
 
-    if pacl.is_null() || (unsafe { IsValidAcl(pacl) }).as_bool() {
+    if unsafe { IsValidAcl(pacl) }.as_bool() {
         return Err(Error::empty());
     }
 
-    unsafe { GetAclInformation(
-        pacl,
-        as_pvoid_mut(&mut si),
-        mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-        AclSizeInformation,
-    ) }?;
+    unsafe { 
+        GetAclInformation(
+            pacl,
+            as_pvoid_mut(&mut si),
+            mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    }?;
 
     Ok(si.AclBytesInUse)
 }
 
-fn acl_entry_size(entry_type: AceType) -> Option<u32> {
+pub(crate) fn acl_entry_size(entry_type: AceType) -> Result<u32> {
     match entry_type {
         AceType::AccessAllow => {
-            Some(mem::size_of::<ACCESS_ALLOWED_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_ALLOWED_ACE>() as u32)
         },
         AceType::AccessAllowCallback => {
-            Some(mem::size_of::<ACCESS_ALLOWED_CALLBACK_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_ALLOWED_CALLBACK_ACE>() as u32)
         }
         AceType::AccessAllowObject => {
-            Some(mem::size_of::<ACCESS_ALLOWED_OBJECT_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_ALLOWED_OBJECT_ACE>() as u32)
         },
         AceType::AccessAllowCallbackObject => {
-            Some(mem::size_of::<ACCESS_ALLOWED_CALLBACK_OBJECT_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_ALLOWED_CALLBACK_OBJECT_ACE>() as u32)
         }
         AceType::AccessDeny => {
-            Some(mem::size_of::<ACCESS_DENIED_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_DENIED_ACE>() as u32)
         },
         AceType::AccessDenyCallback => {
-            Some(mem::size_of::<ACCESS_DENIED_CALLBACK_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_DENIED_CALLBACK_ACE>() as u32)
         },
         AceType::AccessDenyObject => {
-            Some(mem::size_of::<ACCESS_DENIED_OBJECT_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_DENIED_OBJECT_ACE>() as u32)
         },
         AceType::AccessDenyCallbackObject => {
-            Some(mem::size_of::<ACCESS_DENIED_CALLBACK_OBJECT_ACE>() as u32)
+            Ok(mem::size_of::<ACCESS_DENIED_CALLBACK_OBJECT_ACE>() as u32)
         }
         AceType::SystemAudit => {
-            Some(mem::size_of::<SYSTEM_AUDIT_ACE>() as u32)
+            Ok(mem::size_of::<SYSTEM_AUDIT_ACE>() as u32)
         },
         AceType::SystemAuditCallback => {
-            Some(mem::size_of::<SYSTEM_AUDIT_CALLBACK_ACE>() as u32)
+            Ok(mem::size_of::<SYSTEM_AUDIT_CALLBACK_ACE>() as u32)
         },
         AceType::SystemAuditObject => {
-            Some(mem::size_of::<SYSTEM_AUDIT_OBJECT_ACE>() as u32)
+            Ok(mem::size_of::<SYSTEM_AUDIT_OBJECT_ACE>() as u32)
         },
         AceType::SystemAuditCallbackObject => {
-            Some(mem::size_of::<SYSTEM_AUDIT_CALLBACK_OBJECT_ACE>() as u32)
+            Ok(mem::size_of::<SYSTEM_AUDIT_CALLBACK_OBJECT_ACE>() as u32)
         }
         AceType::SystemMandatoryLabel => {
-            Some(mem::size_of::<SYSTEM_MANDATORY_LABEL_ACE>() as u32)
+            Ok(mem::size_of::<SYSTEM_MANDATORY_LABEL_ACE>() as u32)
         }
         AceType::SystemResourceAttribute => {
-            Some(mem::size_of::<SYSTEM_RESOURCE_ATTRIBUTE_ACE>() as u32)
+            Ok(mem::size_of::<SYSTEM_RESOURCE_ATTRIBUTE_ACE>() as u32)
         }
-        _ => None,
+        _ => {
+            Err(Error::empty())
+        },
     }
 }
 
@@ -357,22 +174,15 @@ fn enumerate_acl_entries<T: EntryCallback>(pAcl: *const _ACL, callback: &mut T) 
     let ace_count = unsafe { (*pAcl).AceCount };
 
     for i in 0..ace_count {
-        unsafe { GetAce(
-            pAcl,
-            i as u32,
-            // mem::transmute::<&mut *mut ACE_HEADER, *mut *mut c_void>(&mut hdr),
-            as_ppvoid_mut(&mut hdr)
-        ) }?;
+        unsafe { 
+            GetAce(
+                pAcl,
+                i as u32,
+                as_ppvoid_mut(&mut hdr)
+            )
+        }?;
 
-        let mut entry = ACLEntry {
-            index: i,
-            entry_type: AceType::Unknown,
-            entry_size: 0,
-            size: 0,
-            flags: ACE_FLAGS(0),
-            mask: 0,
-            sid: None,
-        };
+        let mut entry = ACLEntry::new();
 
         match unsafe { (*hdr).AceType } as u32 {
             ACCESS_ALLOWED_ACE_TYPE => {
@@ -476,79 +286,84 @@ fn enumerate_acl_entries<T: EntryCallback>(pAcl: *const _ACL, callback: &mut T) 
             _ => {}
         }
 
-        if !callback.on_entry(hdr, entry)? {
-            break;
+        match callback.on_entry(hdr, entry)? {
+            EntryCallbackResult::Continue => {},
+            EntryCallbackResult::Break => {
+                break;
+            }
         }
     }
 
     Ok(())
 }
 
-struct GetEntryCallback {
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct GetEntryCallback<'s> {
     entries: Vec<ACLEntry>,
-    target: PSID,
+    target_sid: &'s SID,
     target_type: Option<AceType>,
 }
+
+impl<'s> EntryCallback for GetEntryCallback<'s> {
+    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
+        if &entry.sid != self.target_sid {
+            return Ok(EntryCallbackResult::Continue);
+        }
+
+        if let Some(ref t) = self.target_type {
+            if entry.entry_type != *t {
+                return Ok(EntryCallbackResult::Continue);
+            }
+        }
+
+        self.entries.push(entry);
+
+        Ok(EntryCallbackResult::Continue)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct AllEntryCallback {
     entries: Vec<ACLEntry>,
 }
 
-struct AddEntryCallback {
+impl EntryCallback for AllEntryCallback {
+    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
+        self.entries.push(entry);
+        Ok(EntryCallbackResult::Continue)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct AddEntryCallback<'s> {
     new_acl: Vec<u8>,
-    entry_sid: PSID,
+    entry_sid: &'s SID,
     entry_type: AceType,
     entry_flags: ACE_FLAGS,
-    entry_mask: u32,
+    entry_mask: FILE_ACCESS_RIGHTS,
     already_added: bool,
 }
 
-struct RemoveEntryCallback {
-    removed: usize,
-    new_acl: Vec<u8>,
-    target: PSID,
-    target_type: Option<AceType>,
-    flags: Option<ACE_FLAGS>,
-}
-
-impl EntryCallback for GetEntryCallback {
-    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<bool> {
-        if let Some(pSid) = entry.psid() {
-            if unsafe { EqualSid(self.target, pSid) }.is_ok() {
-                if let Some(ref t) = self.target_type {
-                    if entry.entry_type == *t {
-                        self.entries.push(entry);
-                    }
-                }
-            }
-        }
-
-        Ok(true)
-    }
-}
-
-impl EntryCallback for AllEntryCallback {
-    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<bool> {
-        self.entries.push(entry);
-        Ok(true)
-    }
-}
-
-impl AddEntryCallback {
+impl<'s> AddEntryCallback<'s> {
     fn new(
         old_acl: *const _ACL,
-        sid: PSID,
+        sid: &'s SID,
         entry_type: AceType,
         flags: ACE_FLAGS,
-        mask: u32,
-    ) -> Result<AddEntryCallback> {
-        let mut new_acl_size =
-            acl_size(old_acl).unwrap_or(mem::size_of::<_ACL>() as u32) as usize;
-        new_acl_size += acl_entry_size(entry_type).ok_or_else(|| Error::empty())? as usize;
-        new_acl_size += unsafe { GetLengthSid(sid) as usize } - mem::size_of::<u32>();
+        mask: FILE_ACCESS_RIGHTS,
+    ) -> Result<Self> {
+        if sid.is_empty() {
+            return Err(Error::empty());
+        }
+
+        let mut new_acl_size = acl_size(old_acl)?;
+        new_acl_size += ACLEntry::calculate_entry_size(entry_type, sid)?;
 
         let mut obj = AddEntryCallback {
-            new_acl: Vec::with_capacity(new_acl_size),
+            new_acl: Vec::with_capacity(new_acl_size as usize),
             entry_sid: sid,
             entry_type,
             entry_flags: flags,
@@ -558,7 +373,7 @@ impl AddEntryCallback {
 
         unsafe {
             InitializeAcl(
-                obj.new_acl.as_mut_ptr() as *mut _ACL,
+                vec_as_pacl_mut(&mut obj.new_acl),
                 new_acl_size as u32,
                 ACL_REVISION_DS,
             )
@@ -568,43 +383,46 @@ impl AddEntryCallback {
     }
 
     fn insert_entry(&mut self) -> Result<()> {
+        let psid = self.entry_sid.psid().ok_or_else(|| Error::empty())?;
+        let pacl = vec_as_pacl_mut(&mut self.new_acl);
+
         match self.entry_type {
             AceType::AccessAllow => unsafe {
                 AddAccessAllowedAceEx(
-                    self.new_acl.as_mut_ptr() as *mut _,
+                    pacl,
                     ACL_REVISION_DS,
                     self.entry_flags,
-                    self.entry_mask,
-                    self.entry_sid,
+                    self.entry_mask.0,
+                    psid,
                 )
             },
             AceType::AccessDeny => unsafe {
                 AddAccessDeniedAceEx(
-                    self.new_acl.as_mut_ptr() as *mut _,
+                    pacl,
                     ACL_REVISION_DS,
                     self.entry_flags,
-                    self.entry_mask,
-                    self.entry_sid,
+                    self.entry_mask.0,
+                    psid,
                 )
             },
             AceType::SystemAudit => unsafe {
                 AddAuditAccessAceEx(
-                    self.new_acl.as_mut_ptr() as *mut _,
+                    pacl,
                     ACL_REVISION_DS,
                     self.entry_flags,
-                    self.entry_mask,
-                    self.entry_sid,
+                    self.entry_mask.0,
+                    psid,
                     false,
                     false,
                 )
             },
             AceType::SystemMandatoryLabel => unsafe {
                 AddMandatoryAce(
-                    self.new_acl.as_mut_ptr() as *mut _,
+                    pacl,
                     ACL_REVISION_DS,
                     self.entry_flags,
-                    self.entry_mask,
-                    self.entry_sid,
+                    self.entry_mask.0,
+                    psid,
                 )
             },
             _ => Err(Error::empty()),
@@ -612,28 +430,28 @@ impl AddEntryCallback {
     }
 }
 
-impl EntryCallback for AddEntryCallback {
-    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<bool> {
+impl<'s> EntryCallback for AddEntryCallback<'s> {
+    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
         // NOTE(andy): Our assumption here is that the access control list are in the proper order
         //             See https://msdn.microsoft.com/en-us/library/windows/desktop/aa379298(v=vs.85).aspx
 
         if !self.already_added {
             if entry.flags.contains(INHERITED_ACE) {
-                if let Some(sid) = entry.sid {
-                    if entry.entry_type == self.entry_type
-                        && unsafe { EqualSid(PSID(sid.as_ptr() as *mut _), self.entry_sid) }.is_ok()
-                    {
-                        // NOTE(andy): We found an entry that matches the type and sid of the one we were going
-                        //             to add (uninherited). Instead of adding the old one and the new one, we
-                        //             replace the old entry with the new entry.
-                        self.insert_entry()?;
+                if entry.sid.is_empty() {
+                    return Err(Error::empty());
+                }
 
-                        self.already_added = true;
+                if entry.entry_type == self.entry_type && &entry.sid == self.entry_sid {
+                    // NOTE(andy): We found an entry that matches the type and sid of the one we were going
+                    //             to add (uninherited). Instead of adding the old one and the new one, we
+                    //             replace the old entry with the new entry.
+                    self.insert_entry()?;
 
-                        // NOTE(andy): Since we are replacing the matching entry, return true and exit the current
-                        //             entry handler
-                        return Ok(true);
-                    }
+                    self.already_added = true;
+
+                    // NOTE(andy): Since we are replacing the matching entry, return true and exit the current
+                    //             entry handler
+                    return Ok(EntryCallbackResult::Continue);
                 }
 
                 if entry.entry_type == AceType::AccessAllow
@@ -657,7 +475,7 @@ impl EntryCallback for AddEntryCallback {
 
         unsafe {
             AddAce(
-                self.new_acl.as_mut_ptr() as *mut _,
+                vec_as_pacl_mut(&mut self.new_acl),
                 ACL_REVISION_DS,
                 MAXDWORD,
                 hdr as *const c_void,
@@ -665,31 +483,45 @@ impl EntryCallback for AddEntryCallback {
             )
         }?;
 
-        Ok(true)
+        Ok(EntryCallbackResult::Continue)
     }
 }
 
-impl RemoveEntryCallback {
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct RemoveEntryCallback<'s> {
+    removed_count: usize,
+    new_acl: Vec<u8>,
+    target_sid: &'s SID,
+    target_type: Option<AceType>,
+    target_flags: Option<ACE_FLAGS>,
+}
+
+impl<'s> RemoveEntryCallback<'s> {
     fn new(
         old_acl: *const _ACL,
-        target: PSID,
+        target_sid: &'s SID,
         target_type: Option<AceType>,
-        flags: Option<ACE_FLAGS>,
-    ) -> Result<RemoveEntryCallback> {
-        let new_acl_size = acl_size(old_acl)? as usize;
+        target_flags: Option<ACE_FLAGS>,
+    ) -> Result<Self> {
+        if target_sid.is_empty() {
+            return Err(Error::empty());
+        }
+
+        let new_acl_size = acl_size(old_acl)?;
 
         let mut obj = RemoveEntryCallback {
-            removed: 0,
-            target,
+            removed_count: 0,
+            target_sid,
             target_type,
-            flags,
-            new_acl: Vec::with_capacity(new_acl_size),
+            target_flags,
+            new_acl: Vec::with_capacity(new_acl_size as usize),
         };
 
         unsafe {
             InitializeAcl(
-                obj.new_acl.as_mut_ptr() as *mut _ACL,
-                new_acl_size as u32,
+                vec_as_pacl_mut(&mut obj.new_acl),
+                new_acl_size,
                 ACL_REVISION_DS,
             )
         }?;
@@ -698,45 +530,36 @@ impl RemoveEntryCallback {
     }
 }
 
-impl EntryCallback for RemoveEntryCallback {
-    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<bool> {
-        let Some(pSid) = entry.psid() else {
-            return Ok(false);
-        };
+impl<'s> EntryCallback for RemoveEntryCallback<'s> {
+    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
+        if entry.sid.is_empty() {
+            return Err(Error::empty());
+        }
 
-        if unsafe { EqualSid(self.target, pSid) }.is_ok() {
+        if &entry.sid == self.target_sid {
+            let mut target_reached = true;
+
             if let Some(ref t) = self.target_type {
-                if entry.entry_type == *t {
-                    if let Some(mask) = self.flags {
-                        if entry.flags.contains(mask) {
-                            // NOTE(andy) sid, entry_type, and flag mask all match, remove it!
-                            self.removed += 1;
-                            return Ok(true);
-                        }
-                    } else {
-                        // NOTE(andy): We don't have a flags mask to search for so since the entry_type and sid match
-                        //             this is an item we want to remove
-                        self.removed += 1;
-                        return Ok(true);
-                    }
+                if entry.entry_type != *t {
+                    target_reached = false;
                 }
-            } else if let Some(mask) = self.flags {
-                if entry.flags.contains(mask) {
-                    // NOTE(andy) sid and flag mask all match, remove it!
-                    self.removed += 1;
-                    return Ok(true);
+            }
+            
+            if let Some(target_mask) = self.target_flags {
+                if !entry.flags.contains(target_mask) {
+                    target_reached = false;
                 }
-            } else {
-                // NOTE(andy): We don't have a flags mask to search for so since the sid matches
-                //             this is an item we want to remove
-                self.removed += 1;
-                return Ok(true);
+            }
+            
+            if target_reached {
+                self.removed_count += 1;
+                return Ok(EntryCallbackResult::Continue);
             }
         }
 
         unsafe {
             AddAce(
-                self.new_acl.as_mut_ptr() as *mut _ACL,
+                vec_as_pacl_mut(&mut self.new_acl),
                 ACL_REVISION_DS,
                 MAXDWORD,
                 hdr as *mut c_void,
@@ -744,9 +567,11 @@ impl EntryCallback for RemoveEntryCallback {
             )
         }?;
 
-        Ok(true)
+        Ok(EntryCallbackResult::Continue)
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 impl ACL {
     /// Creates an `ACL` object from a specified object handle.
@@ -754,7 +579,7 @@ impl ACL {
     /// # Arguments
     /// * `handle` - An object handle.
     /// * `object_type` - The named object path's type. See [SE_OBJECT_TYPE](https://docs.microsoft.com/en-us/windows/desktop/api/accctrl/ne-accctrl-_se_object_type).
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -766,16 +591,16 @@ impl ACL {
     pub fn from_handle(
         handle: HANDLE,
         object_type: SE_OBJECT_TYPE,
-        get_sacl: bool,
+        include_sacl: bool,
     ) -> Result<Self> {
         let source = SDSource::Handle(handle);
         Ok(ACL {
-            descriptor: match SecurityDescriptor::from_source(&source, object_type, get_sacl) {
+            descriptor: match SecurityDescriptor::from_source(&source, object_type, include_sacl) {
                 Ok(s) => Some(s),
                 Err(e) => return Err(e),
             },
             source,
-            include_sacl: get_sacl,
+            include_sacl,
             object_type: object_type.into(),
         })
     }
@@ -784,7 +609,7 @@ impl ACL {
     ///
     /// # Arguments
     /// * `handle` - A file handle.
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -792,15 +617,15 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_file_handle(handle: HANDLE, get_sacl: bool) -> Result<Self> {
-        ACL::from_handle(handle, SE_FILE_OBJECT, get_sacl)
+    pub fn from_file_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
+        ACL::from_handle(handle, SE_FILE_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified kernel object handle.
     ///
     /// # Arguments
     /// * `handle` - A kernel object handle.
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -808,15 +633,15 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_object_handle(handle: HANDLE, get_sacl: bool) -> Result<Self> {
-        ACL::from_handle(handle, SE_KERNEL_OBJECT, get_sacl)
+    pub fn from_object_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
+        ACL::from_handle(handle, SE_KERNEL_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified registry handle.
     ///
     /// # Arguments
     /// * `handle` - A registry key handle.
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -827,12 +652,12 @@ impl ACL {
     pub fn from_registry_handle(
         handle: HANDLE,
         is_wow6432key: bool,
-        get_sacl: bool,
+        include_sacl: bool,
     ) -> Result<Self> {
         if is_wow6432key {
-            ACL::from_handle(handle, SE_REGISTRY_WOW64_32KEY, get_sacl)
+            ACL::from_handle(handle, SE_REGISTRY_WOW64_32KEY, include_sacl)
         } else {
-            ACL::from_handle(handle, SE_REGISTRY_KEY, get_sacl)
+            ACL::from_handle(handle, SE_REGISTRY_KEY, include_sacl)
         }
     }
 
@@ -841,7 +666,7 @@ impl ACL {
     /// # Arguments
     /// * `path` - A string containing the named object path.
     /// * `object_type` - The named object path's type. See [SE_OBJECT_TYPE](https://docs.microsoft.com/en-us/windows/desktop/api/accctrl/ne-accctrl-_se_object_type).
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -853,16 +678,16 @@ impl ACL {
     pub fn from_path(
         path: &str,
         object_type: SE_OBJECT_TYPE,
-        get_sacl: bool,
+        include_sacl: bool,
     ) -> Result<Self> {
         let source = SDSource::Path(path.to_owned());
         Ok(ACL {
-            descriptor: match SecurityDescriptor::from_source(&source, object_type, get_sacl) {
+            descriptor: match SecurityDescriptor::from_source(&source, object_type, include_sacl) {
                 Ok(s) => Some(s),
                 Err(e) => return Err(e),
             },
             source,
-            include_sacl: get_sacl,
+            include_sacl,
             object_type: object_type.into(),
         })
     }
@@ -871,7 +696,7 @@ impl ACL {
     ///
     /// # Arguments
     /// * `path` - A string containing the file path.
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -879,15 +704,15 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_file_path(path: &str, get_sacl: bool) -> Result<Self> {
-        ACL::from_path(path, SE_FILE_OBJECT, get_sacl)
+    pub fn from_file_path(path: &str, include_sacl: bool) -> Result<Self> {
+        ACL::from_path(path, SE_FILE_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified kernel object path.
     ///
     /// # Arguments
     /// * `path` - A string containing the kernel object path.
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -895,15 +720,15 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_object_path(path: &str, get_sacl: bool) -> Result<Self> {
-        ACL::from_path(path, SE_KERNEL_OBJECT, get_sacl)
+    pub fn from_object_path(path: &str, include_sacl: bool) -> Result<Self> {
+        ACL::from_path(path, SE_KERNEL_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified registry path.
     ///
     /// # Arguments
     /// * `path` - A string containing the registry path.
-    /// * `get_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -914,12 +739,12 @@ impl ACL {
     pub fn from_registry_path(
         path: &str,
         is_wow6432key: bool,
-        get_sacl: bool,
+        include_sacl: bool,
     ) -> Result<Self> {
         if is_wow6432key {
-            ACL::from_path(path, SE_REGISTRY_WOW64_32KEY, get_sacl)
+            ACL::from_path(path, SE_REGISTRY_WOW64_32KEY, include_sacl)
         } else {
-            ACL::from_path(path, SE_REGISTRY_KEY, get_sacl)
+            ACL::from_path(path, SE_REGISTRY_KEY, include_sacl)
         }
     }
 
@@ -928,7 +753,7 @@ impl ACL {
         self.object_type
     }
 
-    pub fn owner(&self) -> Option<&PSID> {
+    pub fn owner(&self) -> Option<SID> {
         let owner = &self.descriptor.as_ref()?.psidOwner;
         if (*owner).is_invalid() {
             return None;
@@ -969,9 +794,9 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn get(&self, sid: PSID, entry_type: Option<AceType>) -> Result<Vec<ACLEntry>> {
+    pub fn get(&self, sid: &SID, entry_type: Option<AceType>) -> Result<Vec<ACLEntry>> {
         let mut callback = GetEntryCallback {
-            target: sid,
+            target_sid: sid,
             target_type: entry_type,
             entries: Vec::new(),
         };
@@ -1017,10 +842,10 @@ impl ACL {
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
     pub fn add_entry(
         &mut self,
-        sid: PSID,
+        sid: &SID,
         entry_type: AceType,
         flags: ACE_FLAGS,
-        mask: u32,
+        mask: FILE_ACCESS_RIGHTS,
     ) -> Result<bool> {
         let object_type = self.object_type();
         if let Some(ref mut descriptor) = self.descriptor {
@@ -1039,6 +864,7 @@ impl ACL {
                 }
             };
 
+            // acl may be NULL
             let mut add_callback = AddEntryCallback::new(acl, sid, entry_type, flags, mask)?;
 
             if !acl.is_null() {
@@ -1051,7 +877,7 @@ impl ACL {
                 add_callback.already_added = true;
             }
 
-            let new_acl = add_callback.new_acl.as_ptr() as *const _ACL;
+            let new_acl = vec_as_pacl(&add_callback.new_acl);
 
             if is_dacl {
                 descriptor.apply(&self.source, object_type.into(), Some(new_acl), None)?;
@@ -1080,11 +906,11 @@ impl ACL {
     /// On error, a Windows error code wrapped in a `Err` type.
     pub fn remove_entry(
         &mut self,
-        sid: PSID,
+        sid: &SID,
         entry_type: Option<AceType>,
         flags: Option<ACE_FLAGS>,
     ) -> Result<usize> {
-        let mut removed_entries = 0;
+        let mut removed_entries_count = 0;
         let object_type = self.object_type().into();
 
         if let Some(ref mut descriptor) = self.descriptor {
@@ -1092,7 +918,7 @@ impl ACL {
                 let mut dacl_callback = RemoveEntryCallback::new(descriptor.pDacl, sid, entry_type, flags)?;
 
                 enumerate_acl_entries(descriptor.pDacl, &mut dacl_callback)?;
-                removed_entries += dacl_callback.removed;
+                removed_entries_count += dacl_callback.removed_count;
 
                 descriptor.apply(
                     &self.source,
@@ -1106,7 +932,7 @@ impl ACL {
                 let mut sacl_callback = RemoveEntryCallback::new(descriptor.pSacl, sid, entry_type, flags)?;
 
                 enumerate_acl_entries(descriptor.pSacl, &mut sacl_callback)?;
-                removed_entries += sacl_callback.removed;
+                removed_entries_count += sacl_callback.removed_count;
 
                 descriptor.apply(
                     &self.source,
@@ -1119,7 +945,7 @@ impl ACL {
 
         self.reload()?;
 
-        Ok(removed_entries)
+        Ok(removed_entries_count)
     }
 
     /// Adds an access allow entry to the access control list.
@@ -1134,7 +960,7 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn allow(&mut self, sid: PSID, inheritable: bool, mask: u32) -> Result<bool> {
+    pub fn allow(&mut self, sid: &SID, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
         if inheritable {
@@ -1155,7 +981,7 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn deny(&mut self, sid: PSID, inheritable: bool, mask: u32) -> Result<bool> {
+    pub fn deny(&mut self, sid: &SID, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
         if inheritable {
@@ -1180,9 +1006,9 @@ impl ACL {
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
     pub fn audit(
         &mut self,
-        sid: PSID,
+        sid: &SID,
         inheritable: bool,
-        mask: u32,
+        mask: FILE_ACCESS_RIGHTS,
         audit_success: bool,
         audit_fails: bool,
     ) -> Result<bool> {
@@ -1217,9 +1043,9 @@ impl ACL {
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
     pub fn integrity_level(
         &mut self,
-        label_sid: PSID,
+        label_sid: &SID,
         inheritable: bool,
-        policy: u32,
+        policy: FILE_ACCESS_RIGHTS,
     ) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
@@ -1243,7 +1069,7 @@ impl ACL {
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn remove(
         &mut self,
-        sid: PSID,
+        sid: &SID,
         entry_type: Option<AceType>,
         inheritable: Option<bool>,
     ) -> Result<usize> {
@@ -1258,65 +1084,58 @@ impl ACL {
     }
 
     pub fn set(&mut self, acl: &[ACLEntry], is_dacl: bool) -> Result<usize> {
-        let new_acl_size = acl
-            .iter()
-            .map(|it| {
-                acl_entry_size(it.entry_type).unwrap_or_default()
-                    - (mem::size_of::<u32>() as u32)
-                    + it.psid().map(|psid| unsafe { GetLengthSid(psid) }).unwrap_or(0)
-            })
-            .sum::<u32>() as usize;
+        let mut new_acl_size = mem::size_of::<_ACL>() as u32;
+        for ace in acl {
+            if ace.sid.is_empty() {
+                return Err(Error::empty());
+            }
 
-        let mut new_acl: Vec<u8> = Vec::with_capacity(new_acl_size);
+            new_acl_size += ace.size()?;
+        }
+
+        let mut new_acl: Vec<u8> = Vec::with_capacity(new_acl_size as usize);
 
         unsafe {
             InitializeAcl(
-                new_acl.as_mut_ptr() as *mut _ACL,
+                vec_as_pacl_mut(&mut new_acl),
                 new_acl_size as u32,
                 ACL_REVISION_DS,
             )
         }?;
 
         for ace in acl {
+            let psid = ace.psid().unwrap();
+
             match ace.entry_type {
                 AceType::AccessAllow => {
-                    let Some(psid) = ace.psid() else {
-                        return Err(Error::empty());
-                    };
                     unsafe {
                         AddAccessAllowedAceEx(
                             new_acl.as_mut_ptr() as *mut _ACL,
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask,
+                            ace.mask.0,
                             psid,
                         )
                     }?;
                 },
                 AceType::AccessDeny => {
-                    let Some(psid) = ace.psid() else {
-                        return Err(Error::empty());
-                    };
                     unsafe {
                         AddAccessDeniedAceEx(
                             new_acl.as_mut_ptr() as *mut _ACL,
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask,
+                            ace.mask.0,
                             psid,
                         )
                     }?;
                 },
                 AceType::SystemAudit => {
-                    let Some(psid) = ace.psid() else {
-                        return Err(Error::empty());
-                    };
                     unsafe {
                         AddAuditAccessAceEx(
                             new_acl.as_mut_ptr() as *mut _ACL,
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask,
+                            ace.mask.0,
                             psid,
                             false,
                             false,
@@ -1324,15 +1143,12 @@ impl ACL {
                     }?;
                 },
                 AceType::SystemMandatoryLabel => {
-                    let Some(psid) = ace.psid() else {
-                        return Err(Error::empty());
-                    };
                     unsafe {
                         AddMandatoryAce(
                             new_acl.as_mut_ptr() as *mut _ACL,
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask,
+                            ace.mask.0,
                             psid,
                         )
                     }?;

@@ -2,7 +2,7 @@
 
 use crate::{
     acl::{
-        ACLEntry, AceType, ACL,
+        ACLEntry, AceType, ACL, ACCESS_MASK,
     },
     utils::{
         current_user, name_to_sid, sid_to_string, string_to_sid, vec_as_psid,
@@ -25,7 +25,7 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            HANDLE,
+            HANDLE, GENERIC_READ, GENERIC_WRITE,
         },
         Security::{
             Authorization::{
@@ -50,7 +50,11 @@ use windows::{
             ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, MAXDWORD, 
             SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, 
             SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
+            SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP, SYSTEM_MANDATORY_LABEL_NO_READ_UP, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
         },
+        Storage::FileSystem::{
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, SYNCHRONIZE, FILE_ALL_ACCESS, FILE_ACCESS_RIGHTS, WRITE_DAC,
+        }
     },
 };
 
@@ -185,8 +189,8 @@ fn query_dacl_unit_test() {
 
     let mut expected = ACLEntry::new();
     expected.entry_type = AceType::AccessDeny;
-    expected.string_sid = guest_sid;
-    expected.flags = 0;
+    // expected.string_sid = guest_sid;
+    expected.flags = ACE_FLAGS(0);
     expected.mask = (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE;
 
     let deny_idx = match acl_entry_exists(&entries, &expected) {
@@ -199,8 +203,8 @@ fn query_dacl_unit_test() {
     };
 
     expected.entry_type = AceType::AccessAllow;
-    expected.string_sid = current_user_sid;
-    expected.flags = 0;
+    // expected.string_sid = current_user_sid;
+    expected.flags = ACE_FLAGS(0);
 
     // NOTE(andy): For ACL entries added by CmdLets on files, SYNCHRONIZE is not set
     expected.mask = FILE_ALL_ACCESS;
@@ -290,10 +294,10 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
 
     let acl_result = if use_handle {
         file = OpenOptions::new()
-            .access_mode(GENERIC_READ | WRITE_DAC)
+            .access_mode((GENERIC_READ | WRITE_DAC).0 )
             .open(path)
             .unwrap();
-        ACL::from_file_handle(file.as_raw_handle() as *mut c_void, false)
+        ACL::from_file_handle(file.as_raw_handle(), false)
     } else {
         ACL::from_file_path(path, false)
     };
@@ -302,7 +306,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     let mut acl = acl_result.unwrap();
 
     match acl.allow(
-        current_user_sid.as_ptr() as PSID,
+        vec_as_psid(&current_user_sid),
         false,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE,
     ) {
@@ -339,7 +343,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     };
 
     match acl.remove(
-        current_user_sid.as_ptr() as PSID,
+        vec_as_psid(&current_user_sid),
         Some(AceType::AccessAllow),
         Some(false),
     ) {
@@ -417,7 +421,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     assert!(acl_result.is_ok());
 
     let mut acl = acl_result.unwrap();
-    match acl.deny(current_user_sid.as_ptr() as PSID, false, FILE_GENERIC_WRITE) {
+    match acl.deny(vec_as_psid(&current_user_sid), false, FILE_GENERIC_WRITE) {
         Ok(x) => assert!(x),
         Err(x) => {
             println!(
@@ -451,7 +455,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     }
 
     match acl.remove(
-        current_user_sid.as_ptr() as PSID,
+        vec_as_psid(&current_user_sid),
         Some(AceType::AccessDeny),
         Some(false),
     ) {
@@ -515,7 +519,7 @@ fn add_remove_sacl_mil() {
 
     let mut acl = acl_result.unwrap();
     match acl.integrity_level(
-        low_mil_sid.as_ptr() as PSID,
+        vec_as_psid(&low_mil_sid),
         false,
         SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
             | SYSTEM_MANDATORY_LABEL_NO_READ_UP
@@ -538,7 +542,7 @@ fn add_remove_sacl_mil() {
     let mut expected = ACLEntry::new();
     expected.entry_type = AceType::SystemMandatoryLabel;
     expected.string_sid = low_mil_string_sid.to_string();
-    expected.flags = 0;
+    expected.flags = ACE_FLAGS(0);
     expected.mask = SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP
         | SYSTEM_MANDATORY_LABEL_NO_READ_UP
         | SYSTEM_MANDATORY_LABEL_NO_WRITE_UP;
@@ -546,7 +550,7 @@ fn add_remove_sacl_mil() {
     assert!(acl_entry_exists(&entries, &expected).is_some());
 
     match acl.remove(
-        low_mil_sid.as_ptr() as PSID,
+        vec_as_psid(&low_mil_sid),
         Some(AceType::SystemMandatoryLabel),
         Some(false),
     ) {
@@ -592,7 +596,7 @@ fn add_remove_sacl_audit() {
 
     let mut acl = acl_result.unwrap();
     match acl.audit(
-        current_user_sid.as_ptr() as PSID,
+        vec_as_psid(&current_user_sid),
         false,
         FILE_GENERIC_READ,
         true,
@@ -618,7 +622,7 @@ fn add_remove_sacl_audit() {
     assert!(acl_entry_exists(&entries, &expected).is_some());
 
     match acl.remove(
-        current_user_sid.as_ptr() as PSID,
+        vec_as_psid(&current_user_sid),
         Some(AceType::SystemAudit),
         Some(false),
     ) {
@@ -669,7 +673,7 @@ fn acl_get_and_remove_test() {
     let mut acl = acl_result.unwrap();
 
     let mut results = acl
-        .get(world_sid.as_ptr() as PSID, None)
+        .get(vec_as_psid(&world_sid), None)
         .unwrap_or_else(|_x| {
             assert!(false);
             Vec::new()
@@ -677,37 +681,37 @@ fn acl_get_and_remove_test() {
     assert_eq!(results.len(), 0);
 
     results = acl
-        .get(guest_sid.as_ptr() as PSID, None)
+        .get(vec_as_psid(&guest_sid), None)
         .unwrap_or_default();
     assert_eq!(results.len(), 3);
 
     results = acl
-        .get(guest_sid.as_ptr() as PSID, Some(AceType::AccessAllow))
+        .get(vec_as_psid(&guest_sid), Some(AceType::AccessAllow))
         .unwrap_or_default();
     assert_eq!(results.len(), 1);
 
     results = acl
-        .get(guest_sid.as_ptr() as PSID, Some(AceType::AccessDeny))
+        .get(vec_as_psid(&guest_sid), Some(AceType::AccessDeny))
         .unwrap_or_default();
     assert_eq!(results.len(), 1);
 
     results = acl
-        .get(guest_sid.as_ptr() as PSID, Some(AceType::SystemAudit))
+        .get(vec_as_psid(&guest_sid), Some(AceType::SystemAudit))
         .unwrap_or_default();
     assert_eq!(results.len(), 1);
 
     let mut removed = acl
-        .remove(guest_sid.as_ptr() as PSID, Some(AceType::AccessDeny), None)
+        .remove(vec_as_psid(&guest_sid), Some(AceType::AccessDeny), None)
         .unwrap_or(0);
     assert_eq!(removed, 1);
 
     results = acl
-        .get(guest_sid.as_ptr() as PSID, None)
+        .get(vec_as_psid(&guest_sid), None)
         .unwrap_or_default();
     assert_eq!(results.len(), 2);
 
     removed = acl
-        .remove(guest_sid.as_ptr() as PSID, None, None)
+        .remove(vec_as_psid(&guest_sid), None, None)
         .unwrap_or(0);
     assert_eq!(removed, 2);
 }
