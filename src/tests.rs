@@ -1,20 +1,57 @@
 #![cfg(windows)]
 
-use crate::acl::{ACLEntry, AceType, ACL};
-use crate::utils::{current_user, name_to_sid, sid_to_string, string_to_sid};
-use std::env::current_exe;
-use std::fs::{File, OpenOptions};
-use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
-use std::process::Command;
+use crate::{
+    acl::{
+        ACLEntry, AceType, ACL,
+    },
+    utils::{
+        current_user, name_to_sid, sid_to_string, string_to_sid, vec_as_psid,
+    },
+};
+use std::{
+    env::current_exe,
+    fs::{File, OpenOptions},
+    os::windows::{
+        fs::OpenOptionsExt,
+        io::AsRawHandle,
+    },
+    path::PathBuf,
+    process::Command,
+};
 use core::ffi::c_void;
-use winapi::shared::winerror::ERROR_NOT_ALL_ASSIGNED;
-use winapi::um::winnt::{
-    FAILED_ACCESS_ACE_FLAG, FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE, GENERIC_READ, GENERIC_WRITE, PSID, SUCCESSFUL_ACCESS_ACE_FLAG, SYNCHRONIZE,
-    SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP, SYSTEM_MANDATORY_LABEL_NO_READ_UP,
-    SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, WRITE_DAC,
+use windows::{
+    core::{
+        Error, Result,
+    },
+    Win32::{
+        Foundation::{
+            HANDLE,
+        },
+        Security::{
+            Authorization::{
+                SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
+                SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
+                SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
+            },
+            AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce,
+            CopySid, EqualSid, GetAce, GetAclInformation, GetLengthSid, InitializeAcl, IsValidAcl,
+            IsValidSid, AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
+            ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE,
+            ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE,
+            ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
+            FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, 
+            SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE,
+            SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE,
+            SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, ACE_HEADER, ACE_FLAGS,
+        },
+        System::SystemServices::{
+            ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, 
+            ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, 
+            ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, MAXDWORD, 
+            SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, 
+            SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
+        },
+    },
 };
 
 fn support_path() -> Option<PathBuf> {
@@ -69,7 +106,7 @@ fn string_sid_by_user(user: &str) -> String {
     assert_ne!(user_sid.len(), 0);
 
     let user_string_sid =
-        unsafe { sid_to_string(user_sid.as_ptr() as PSID) }.unwrap_or(String::from(""));
+        unsafe { sid_to_string(vec_as_psid(&user_sid)) }.unwrap_or(String::from(""));
     assert_ne!(user_string_sid.len(), 0);
 
     user_string_sid
@@ -91,7 +128,7 @@ fn lookupname_unit_test() {
     assert_ne!(raw_world_sid.len(), 0);
 
     let sid_string =
-        unsafe { sid_to_string(raw_world_sid.as_ptr() as PSID) }.unwrap_or(String::from(""));
+        unsafe { sid_to_string(vec_as_psid(&raw_world_sid)) }.unwrap_or(String::from(""));
     assert_ne!(sid_string.len(), 0);
 
     assert_eq!(sid_string, world_string_sid);
@@ -104,7 +141,7 @@ fn sidstring_unit_test() {
     let sid = string_to_sid(world_string_sid).unwrap_or_default();
     assert_ne!(sid.len(), 0);
 
-    let sid_string = unsafe { sid_to_string(sid.as_ptr() as PSID) }.unwrap_or(String::from(""));
+    let sid_string = unsafe { sid_to_string(vec_as_psid(&sid)) }.unwrap_or(String::from(""));
     assert_ne!(sid_string.len(), 0);
 
     assert_eq!(sid_string, world_string_sid);
@@ -115,7 +152,7 @@ fn acl_entry_exists(entries: &Vec<ACLEntry>, expected: &ACLEntry) -> Option<usiz
         let entry = &entries[i];
 
         if entry.entry_type == expected.entry_type
-            && entry.string_sid == expected.string_sid
+            && entry.string_sid() == expected.string_sid()
             && entry.flags == expected.flags
             && entry.mask == expected.mask
         {

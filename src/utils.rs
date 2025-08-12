@@ -2,38 +2,45 @@
 
 #![allow(non_snake_case)]
 
-use std::ffi::{c_void, OsStr};
-use std::iter::once;
-use std::mem;
-use std::ops::Drop;
-use std::os::windows::ffi::OsStrExt;
-use std::ptr::null_mut;
-use widestring::WideString;
-// use windows_strings::*;
-// use winapi::shared::minwindef::{BYTE, DWORD, FALSE, HLOCAL, PDWORD};
-// use winapi::shared::ntdef::{HANDLE, LPCWSTR, LPWSTR, NULL, WCHAR};
-use windows::core::{Result, Error, PWSTR};
-use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
-use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NOT_ALL_ASSIGNED, ERROR_SUCCESS};
-
-#[allow(unused_imports)]
-use windows::Win32::Security::Authorization::{
-    SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
-    SE_SERVICE,
-    GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, SetSecurityInfo,
+use std::{
+    ffi::{c_void, OsStr},
+    iter::once,
+    mem,
+    ops::Drop,
+    os::windows::ffi::OsStrExt,
+    ptr::{null, null_mut},
 };
-use windows::Win32::Foundation::{
-    HLOCAL, GetLastError, SetLastError, LocalFree,
-    CloseHandle, INVALID_HANDLE_VALUE};
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows::Win32::Security::{
-    AdjustTokenPrivileges, CopySid, GetLengthSid, LookupAccountNameW, LookupPrivilegeValueW,
-    DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    PSID, SACL_SECURITY_INFORMATION, SE_PRIVILEGE_ENABLED, SID_NAME_USE,
-    TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+use windows::{
+    core::{Result, Error, PWSTR, HRESULT},
+    Win32::{
+        Foundation::{
+            ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS,
+            HLOCAL, LocalFree,
+            CloseHandle, INVALID_HANDLE_VALUE, HANDLE,
+        },
+        System::{
+            Threading::{
+                GetCurrentProcess, OpenProcessToken,
+            },
+            WindowsProgramming::{
+                GetUserNameW,
+            },
+        },
+        Security::{
+            Authorization::{
+                ConvertSidToStringSidW, ConvertStringSidToSidW,
+                SE_OBJECT_TYPE, GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, 
+                SetSecurityInfo,
+            },
+            AdjustTokenPrivileges, CopySid, GetLengthSid, LookupAccountNameW, LookupPrivilegeValueW,
+            DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+            PSID, SACL_SECURITY_INFORMATION, SE_PRIVILEGE_ENABLED, SID_NAME_USE,
+            TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_PRIVILEGES_ATTRIBUTES,
+            ACL as _ACL, OBJECT_SECURITY_INFORMATION,
+        },
+    },
 };
-use windows::Win32::System::WindowsProgramming::{GetUserNameW};
 
 #[inline(always)]
 pub(crate) fn as_pvoid_mut<T>( r: &mut T ) -> *mut c_void {
@@ -43,6 +50,16 @@ pub(crate) fn as_pvoid_mut<T>( r: &mut T ) -> *mut c_void {
 #[inline(always)]
 pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
     r as *mut _ as *mut *mut c_void
+}
+
+#[inline(always)]
+pub(crate) fn vec_as_psid( sid: &Vec<u8> ) -> PSID {
+    PSID(sid.as_ptr() as *mut c_void)
+}
+
+#[inline(always)]
+pub(crate) fn str_to_wstr( r: &str ) -> Vec<u16> {
+    OsStr::new(r).encode_wide().chain(once(0)).collect()
 }
 
 // #[inline(always)]
@@ -64,9 +81,11 @@ pub unsafe fn sid_to_string(sid: PSID) -> Result<String> {
         return Err(Error::empty());
     }
 
+    let string_sid = raw_string_sid.to_string().map_err(|_| Error::empty())?;
+
     unsafe { LocalFree(Some(HLOCAL(raw_string_sid.as_ptr() as *mut _))) };
 
-    raw_string_sid.to_string().map_err(|_| Error::empty())
+    Ok(string_sid)
 }
 
 /// Resolves a system username (either in the format of "user" or "DOMAIN\user") into a raw SID. The raw SID
@@ -82,59 +101,57 @@ pub unsafe fn sid_to_string(sid: PSID) -> Result<String> {
 /// **Note**: If the error code is 0, `GetLastError()` returned `ERROR_INSUFFICIENT_BUFFER` after invoking `LookupAccountNameW` or
 ///         the `sid_size` is 0.
 pub fn name_to_sid(name: &str, system: Option<&str>) -> Result<Vec<u8>> {
-    let name: Vec<u16> = OsStr::new(name).encode_wide().chain(once(0)).collect();
+    let mut name: Vec<u16> = str_to_wstr(name);
     let name = PWSTR::from_raw(name.as_mut_ptr());
 
-    let system: Option<Vec<u16>> =
-        system.map(|name| OsStr::new(name).encode_wide().chain(once(0)).collect());
-    let system: Option<PWSTR> = system.as_mut()
-        .map( |system| PWSTR::from_raw(system.as_mut_ptr()));
+    let mut system: Option<Vec<u16>> = system.map(|name| str_to_wstr(name));
+    let system: PWSTR = system.as_mut()
+        .map(|system| PWSTR::from_raw(system.as_mut_ptr()))
+        .unwrap_or_else(|| PWSTR::null());
 
-        let mut sid_size: u32 = 0;
+    let mut sid_size: u32 = 0;
     let mut sid_type: SID_NAME_USE = SID_NAME_USE(0);
 
-    let mut name_size: u32 = 0;
+    let mut domain_name_size: u32 = 0;
 
-    if unsafe {
+    match unsafe { 
         LookupAccountNameW(
             system,
-            Some(raw_name.as_ptr() as LPCWSTR),
+            name,
             None,
             &mut sid_size,
-            NULL as LPWSTR,
-            &mut name_size,
+            None,
+            &mut domain_name_size,
             &mut sid_type,
         )
-    } != 0
-    {
-        return Err(unsafe { GetLastError() });
-    }
-
-    if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER {
-        return Err(0);
-    }
+    } {
+        Ok(()) => {
+            return Err(Error::empty());
+        },
+        Err(e) if e.code() != ERROR_INSUFFICIENT_BUFFER.into() => {
+            return Err(e);
+        },
+        Err(_) => {}
+    };
 
     if sid_size == 0 {
-        return Err(0);
+        return Err(Error::empty());
     }
 
-    let mut sid: Vec<BYTE> = Vec::with_capacity(sid_size as usize);
-    let mut name: Vec<BYTE> = Vec::with_capacity((name_size as usize) * mem::size_of::<WCHAR>());
+    let mut sid: Vec<u8> = Vec::with_capacity(sid_size as usize);
+    let mut domain_name: Vec<u8> = Vec::with_capacity((domain_name_size as usize) * mem::size_of::<u16>());
 
-    if unsafe {
+    unsafe {
         LookupAccountNameW(
-            system_ptr,
-            raw_name.as_ptr() as LPCWSTR,
-            sid.as_mut_ptr() as PSID,
+            system,
+            name,
+            Some(PSID(sid.as_mut_ptr() as *mut c_void)),
             &mut sid_size,
-            name.as_mut_ptr() as LPWSTR,
-            &mut name_size,
+            Some(PWSTR::from_raw(domain_name.as_mut_ptr() as *mut u16)),
+            &mut domain_name_size,
             &mut sid_type,
         )
-    } == 0
-    {
-        return Err(unsafe { GetLastError() });
-    }
+    }?;
 
     unsafe { sid.set_len(sid_size as usize) };
 
@@ -148,23 +165,23 @@ pub fn name_to_sid(name: &str, system: Option<&str>) -> Result<Vec<u8>> {
 ///
 /// # Errors
 /// On error, a Windows error code is wrapped in an `Err` type.
-pub fn string_to_sid(string_sid: &str) -> Result<Vec<BYTE>, DWORD> {
-    let mut sid: PSID = NULL as PSID;
-    let raw_string_sid: Vec<u16> = OsStr::new(string_sid)
-        .encode_wide()
-        .chain(once(0))
-        .collect();
+pub fn string_to_sid(string_sid: &str) -> Result<Vec<u8>> {
+    let mut raw_string_sid: Vec<u16> = str_to_wstr(string_sid);
+    let raw_string_sid = PWSTR::from_raw(raw_string_sid.as_mut_ptr());
 
-    if unsafe { ConvertStringSidToSidW(raw_string_sid.as_ptr(), &mut sid) } == 0 {
-        return Err(unsafe { GetLastError() });
-    }
+    let mut sid: PSID = PSID(null_mut());
+    unsafe { ConvertStringSidToSidW(raw_string_sid, &mut sid) }?;
 
     let size = unsafe { GetLengthSid(sid) };
-    let mut sid_buf: Vec<BYTE> = Vec::with_capacity(size as usize);
+    let mut sid_buf: Vec<u8> = Vec::with_capacity(size as usize);
 
-    if unsafe { CopySid(size, sid_buf.as_mut_ptr() as PSID, sid) } == 0 {
-        return Err(unsafe { GetLastError() });
-    }
+    unsafe { 
+        CopySid(
+            size, 
+            PSID(sid_buf.as_mut_ptr() as *mut c_void), 
+            sid
+        )
+    }?;
 
     unsafe { sid_buf.set_len(size as usize) };
 
@@ -172,78 +189,73 @@ pub fn string_to_sid(string_sid: &str) -> Result<Vec<BYTE>, DWORD> {
 }
 
 /// Retrieves the user name of the current user.
-pub fn current_user() -> Option<String> {
-    let mut username_size: DWORD = 0 as DWORD;
+pub fn current_user() -> Result<String> {
+    let mut username_size: u32 = 0;
 
-    if unsafe { GetUserNameW(NULL as LPWSTR, &mut username_size) } != 0 {
-        return None;
-    }
+    unsafe { GetUserNameW(None, &mut username_size) }?;
 
     let mut username: Vec<u16> = Vec::with_capacity(username_size as usize);
-    if unsafe { GetUserNameW(username.as_mut_ptr() as LPWSTR, &mut username_size) } == 0 {
-        return None;
-    }
+    let username = PWSTR(username.as_mut_ptr() as *mut u16);
 
-    let name = unsafe { WideString::from_ptr(username.as_ptr(), (username_size - 1) as usize) };
+    unsafe { 
+        GetUserNameW(
+            Some(username),
+            &mut username_size
+        )
+    }?;
 
-    Some(name.to_string_lossy())
+    unsafe { username.to_string() }.map_err(|_| Error::empty())
 }
 
-fn set_privilege(name: &str, is_enabled: bool) -> Result<bool, DWORD> {
+fn set_privilege(name: &str, is_enabled: bool) -> Result<bool> {
     let mut tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
-    let wPrivilegeName: Vec<u16> = OsStr::new(name).encode_wide().chain(once(0)).collect();
+    
+    let mut wPrivilegeName: Vec<u16> = str_to_wstr(name);
+    let wPrivilegeName = PWSTR(wPrivilegeName.as_mut_ptr() as *mut u16);
 
-    if unsafe {
+    unsafe {
         LookupPrivilegeValueW(
-            NULL as LPCWSTR,
-            wPrivilegeName.as_ptr(),
+            PWSTR::null(),
+            wPrivilegeName,
             &mut tkp.Privileges[0].Luid,
         )
-    } == 0
-    {
-        return Err(unsafe { GetLastError() });
-    }
+    }?;
 
     tkp.PrivilegeCount = 1;
 
     if is_enabled {
         tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
     } else {
-        tkp.Privileges[0].Attributes = 0;
+        tkp.Privileges[0].Attributes = TOKEN_PRIVILEGES_ATTRIBUTES(0);
     }
 
     let mut hToken: HANDLE = INVALID_HANDLE_VALUE;
-    if unsafe {
+    unsafe {
         OpenProcessToken(
             GetCurrentProcess(),
             TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
             &mut hToken,
         )
-    } == 0
-    {
-        return Err(unsafe { GetLastError() });
-    }
+    }?;
 
-    let status = unsafe {
+    match unsafe {
         AdjustTokenPrivileges(
             hToken,
-            FALSE,
-            &mut tkp,
+            false,
+            Some(&mut tkp),
             0,
-            NULL as PTOKEN_PRIVILEGES,
-            NULL as PDWORD,
+            None,
+            None,
         )
+    } {
+        Ok(()) => {
+            unsafe { CloseHandle(hToken) }?;
+        },
+        Err(e) => {
+            let _ = unsafe { CloseHandle(hToken) };
+            return Err(e);
+        }
     };
-    let code = unsafe { GetLastError() };
-    unsafe { CloseHandle(hToken) };
-
-    if code == ERROR_NOT_ALL_ASSIGNED {
-        return Err(code);
-    }
-
-    if status == 0 {
-        return Err(code);
-    }
 
     Ok(is_enabled)
 }
@@ -260,7 +272,7 @@ struct SystemPrivilege {
 }
 
 impl SystemPrivilege {
-    fn acquire(name: &str) -> Result<SystemPrivilege, DWORD> {
+    fn acquire(name: &str) -> Result<SystemPrivilege> {
         set_privilege(name, true).map(|_| SystemPrivilege {
             name: Some(name.to_owned()),
         })
@@ -289,10 +301,10 @@ pub struct SecurityDescriptor {
     pSecurityDescriptor: PSECURITY_DESCRIPTOR,
 
     /// Pointer to the discretionary access control list in the security descriptor
-    pub pDacl: PACL,
+    pub pDacl: *mut _ACL,
 
     /// Pointer to the system access control list in the security descriptor
-    pub pSacl: PACL,
+    pub pSacl: *mut _ACL,
 
     pub psidOwner: PSID,
     pub psidGroup: PSID,
@@ -313,19 +325,13 @@ impl SecurityDescriptor {
         source: &SDSource,
         obj_type: SE_OBJECT_TYPE,
         get_sacl: bool,
-    ) -> Result<SecurityDescriptor, DWORD> {
+    ) -> Result<SecurityDescriptor> {
         let mut obj = SecurityDescriptor::default();
         let mut flags =
             DACL_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION;
 
-        let privilege: Option<SystemPrivilege>;
-
         if get_sacl {
-            privilege = SystemPrivilege::acquire("SeSecurityPrivilege").ok();
-            if privilege.is_none() {
-                return Err(unsafe { GetLastError() });
-            }
-
+            let _ = SystemPrivilege::acquire("SeSecurityPrivilege")?;
             flags |= SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
         }
 
@@ -335,24 +341,26 @@ impl SecurityDescriptor {
                     handle,
                     obj_type,
                     flags,
-                    &mut obj.psidOwner,
-                    &mut obj.psidGroup,
-                    &mut obj.pDacl,
-                    &mut obj.pSacl,
-                    &mut obj.pSecurityDescriptor,
+                    Some(&mut obj.psidOwner),
+                    Some(&mut obj.psidGroup),
+                    Some(&mut obj.pDacl),
+                    Some(&mut obj.pSacl),
+                    Some(&mut obj.pSecurityDescriptor),
                 )
             },
             SDSource::Path(ref path) => {
-                let wPath: Vec<u16> = OsStr::new(path).encode_wide().chain(once(0)).collect();
+                let mut wPath: Vec<u16> = str_to_wstr(path);
+                let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+
                 unsafe {
                     GetNamedSecurityInfoW(
-                        wPath.as_ptr(),
+                        wPath,
                         obj_type,
                         flags,
-                        &mut obj.psidOwner,
-                        &mut obj.psidGroup,
-                        &mut obj.pDacl,
-                        &mut obj.pSacl,
+                        Some(&mut obj.psidOwner),
+                        Some(&mut obj.psidGroup),
+                        Some(&mut obj.pDacl),
+                        Some(&mut obj.pSacl),
                         &mut obj.pSecurityDescriptor,
                     )
                 }
@@ -360,12 +368,12 @@ impl SecurityDescriptor {
         };
 
         if ret != ERROR_SUCCESS {
-            unsafe { SetLastError(ret) };
-            return Err(ret);
+            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
+            return Err(err);
         }
 
         if !get_sacl {
-            obj.pSacl = NULL as PACL;
+            obj.pSacl = null_mut();
         }
 
         Ok(obj)
@@ -373,11 +381,11 @@ impl SecurityDescriptor {
 
     fn default() -> SecurityDescriptor {
         SecurityDescriptor {
-            pSecurityDescriptor: NULL,
-            pDacl: NULL as PACL,
-            pSacl: NULL as PACL,
-            psidOwner: NULL,
-            psidGroup: NULL,
+            pSecurityDescriptor: PSECURITY_DESCRIPTOR(null_mut()),
+            pDacl: null_mut(),
+            pSacl: null_mut(),
+            psidOwner: PSID(null_mut()),
+            psidGroup: PSID(null_mut()),
         }
     }
 
@@ -399,25 +407,24 @@ impl SecurityDescriptor {
         &mut self,
         source: &SDSource,
         obj_type: SE_OBJECT_TYPE,
-        dacl: Option<PACL>,
-        sacl: Option<PACL>,
-    ) -> bool {
-        let dacl_ptr = dacl.unwrap_or(NULL as PACL);
-        let sacl_ptr = sacl.unwrap_or(NULL as PACL);
+        mut dacl: Option<*const _ACL>,
+        mut sacl: Option<*const _ACL>,
+    ) -> Result<()> {
+        if dacl == Some(null()) {
+            dacl = None;
+        }
+        if sacl == Some(null()) {
+            sacl = None;
+        }
 
-        let mut flags = 0;
-        if dacl_ptr != (NULL as PACL) {
+        let mut flags = OBJECT_SECURITY_INFORMATION(0);
+
+        if dacl.is_some() {
             flags |= DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
         }
 
-        let privilege: Option<SystemPrivilege>;
-
-        if sacl_ptr != (NULL as PACL) {
-            privilege = SystemPrivilege::acquire("SeSecurityPrivilege").ok();
-            if privilege.is_none() {
-                return false;
-            }
-
+        if sacl.is_some() {
+            let _ = SystemPrivilege::acquire("SeSecurityPrivilege")?;
             flags |= SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
         }
 
@@ -427,41 +434,42 @@ impl SecurityDescriptor {
                     handle,
                     obj_type,
                     flags,
-                    NULL as PSID,
-                    NULL as PSID,
-                    dacl_ptr,
-                    sacl_ptr,
+                    None,
+                    None,
+                    dacl,
+                    sacl,
                 )
             },
             SDSource::Path(ref path) => {
-                let mut wPath: Vec<u16> = OsStr::new(path).encode_wide().chain(once(0)).collect();
+                let mut wPath: Vec<u16> = str_to_wstr(path);
+                let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
                 unsafe {
                     SetNamedSecurityInfoW(
-                        wPath.as_mut_ptr(),
+                        wPath,
                         obj_type,
                         flags,
-                        NULL as PSID,
-                        NULL as PSID,
-                        dacl_ptr,
-                        sacl_ptr,
+                        None,
+                        None,
+                        dacl,
+                        sacl,
                     )
                 }
             }
         };
 
         if ret != ERROR_SUCCESS {
-            unsafe { SetLastError(ret) };
-            return false;
+            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
+            return Err(err);
         }
 
-        true
+        Ok(())
     }
 }
 
 impl Drop for SecurityDescriptor {
     fn drop(&mut self) {
-        if self.pSecurityDescriptor != NULL {
-            unsafe { LocalFree(self.pSecurityDescriptor) };
+        if self.pSecurityDescriptor.0.is_null() {
+            unsafe { LocalFree(Some(HLOCAL(self.pSecurityDescriptor.0 as *mut _) )) };
         }
     }
 }

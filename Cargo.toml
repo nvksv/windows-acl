@@ -1,6 +1,6 @@
 [package]
 name = "windows-acl"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["William Woodruff <william@trailofbits.com>", "yying <contact@trailofbits.com>"]
 description = "Rust crate to simplify Windows ACL operations"
@@ -21,8 +21,6 @@ name = "windows_acl"
 path = "src/lib.rs"
 
 [dependencies]
-libc = "0.2.40"
-widestring = "1.0.0"
 
 [dependencies.windows]
 version = "0.61"
