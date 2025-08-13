@@ -103,10 +103,11 @@ function ResetDaclEntries {
     $acl.SetAccessRuleProtection($true, $true)
     $acl | Set-Acl -Path $Path
 
+
     $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule $currentUser, "Read", "Allow"
-    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Administrators", "Read", "Allow"
-    $everyoneRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Everyone", "Read", "Allow"
-    $authusersRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Authenticated Users", "Read", "Allow"
+    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule $administratorsSid, "Read", "Allow"
+    $everyoneRule = New-Object System.Security.AccessControl.FileSystemAccessRule $EveryoneSid, "Read", "Allow"
+    $authusersRule = New-Object System.Security.AccessControl.FileSystemAccessRule $authenticatedUsersSid, "Read", "Allow"
     
     $acl = Get-Acl -Path $Path
     $acl.RemoveAccessRuleAll($userRule)
@@ -116,12 +117,18 @@ function ResetDaclEntries {
     $acl | Set-Acl -Path $Path    
 }
 
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$currentDomain = $currentUser.AccountDomainSid
+
+$administratorsSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::AccountDomainAdminsSid, $currentDomain);
+$guestSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::AccountGuestSid, $currentDomain);
+$everyoneSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::WorldSid, $null);
+$authenticatedUsersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::AuthenticatedUserSid, $null);
 
 # Setup query_test
 $queryPath = Join-Path -Path $supportPath -ChildPath "query_test"
 
-$guestRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Guest", "ReadAndExecute", "Deny"
+$guestRule = New-Object System.Security.AccessControl.FileSystemAccessRule $guestSid, "ReadAndExecute", "Deny"
 $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule $currentUser, "FullControl", "Allow"
 
 $acl = Get-Acl -Path $queryPath
@@ -132,7 +139,7 @@ $acl | Set-Acl -Path $queryPath
 # Setup query_sacl_test
 $queryPath = Join-Path -Path $supportPath -ChildPath "query_sacl_test"
 
-$auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule "Everyone", "Read,Write", "Success,Failure"
+$auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule $everyoneSid, "Read,Write", "Success,Failure"
 
 $acl = Get-Acl -Path $queryPath
 $acl.SetAuditRule($auditRule)
@@ -181,9 +188,9 @@ $acl | Set-Acl -Path $queryPath
 # Setup acl_get_and_remove
 $queryPath = Join-Path -Path $supportPath -ChildPath "acl_get_and_remove"
 
-$readRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Guest", "Read", "Allow"
-$writeRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Guest", "Write", "Deny"
-$auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule "Guest", "Read, Write", "Success,Failure"
+$readRule = New-Object System.Security.AccessControl.FileSystemAccessRule $guestSid, "Read", "Allow"
+$writeRule = New-Object System.Security.AccessControl.FileSystemAccessRule $guestSid, "Write", "Deny"
+$auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule $guestSid, "Read, Write", "Success,Failure"
 
 $acl = Get-Acl -Path $queryPath
 $null = $acl.SetAccessRule($writeRule)

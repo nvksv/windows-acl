@@ -103,7 +103,7 @@ fn acl_size(pacl: *const _ACL) -> Result<u32> {
 
     let mut si: ACL_SIZE_INFORMATION = unsafe { mem::zeroed::<ACL_SIZE_INFORMATION>() };
 
-    if unsafe { IsValidAcl(pacl) }.as_bool() {
+    if !unsafe { IsValidAcl(pacl) }.as_bool() {
         return Err(Error::empty());
     }
 

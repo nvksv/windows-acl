@@ -11,11 +11,11 @@ use std::{
 };
 use windows::{
     core::{
-        Result, Error, PWSTR, 
+        Result, Error, PWSTR, HRESULT,
     },
     Win32::{
         Foundation::{
-            CloseHandle, INVALID_HANDLE_VALUE, HANDLE,
+            CloseHandle, INVALID_HANDLE_VALUE, HANDLE, ERROR_INSUFFICIENT_BUFFER,
         },
         System::{
             Threading::{
@@ -67,7 +67,20 @@ pub(crate) fn str_to_wstr( r: &str ) -> Vec<u16> {
 pub fn current_user_account_name() -> Result<String> {
     let mut username_size: u32 = 0;
 
-    unsafe { GetUserNameW(None, &mut username_size) }?;
+    match unsafe { 
+        GetUserNameW(
+            None, 
+            &mut username_size
+        ) 
+    } {
+        Ok(()) => {
+            return Err(Error::empty());
+        },
+        Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+            return Err(e);
+        },
+        Err(_) => {}
+    };
 
     let mut username: Vec<u16> = Vec::with_capacity(username_size as usize);
     let username = PWSTR(username.as_mut_ptr() as *mut u16);

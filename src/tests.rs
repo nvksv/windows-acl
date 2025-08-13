@@ -19,7 +19,7 @@ use std::{
 use core::ffi::c_void;
 use windows::{
     core::{
-        Error, Result,
+        Error, Result, HRESULT,
     },
     Win32::{
         Foundation::{
@@ -29,7 +29,7 @@ use windows::{
                 SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
                 SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
                 SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
-            }, CopySid, EqualSid, GetAce, GetAclInformation, GetLengthSid, InitializeAcl, IsValidAcl, IsValidSid, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE, ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, ACE_FLAGS, ACE_HEADER, ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE, SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, WELL_KNOWN_SID_TYPE, SECURITY_WORLD_SID_AUTHORITY, WinAccountGuestSid,
+            }, CopySid, EqualSid, GetAce, GetAclInformation, GetLengthSid, InitializeAcl, IsValidAcl, IsValidSid, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE, ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, ACE_FLAGS, ACE_HEADER, ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE, SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, WELL_KNOWN_SID_TYPE, SECURITY_WORLD_SID_AUTHORITY, WinAccountGuestSid, WinWorldSid,
         }, Storage::FileSystem::{
             FILE_ACCESS_RIGHTS, FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, SYNCHRONIZE, WRITE_DAC
         }, System::SystemServices::{
@@ -104,11 +104,13 @@ fn current_user_string_sid() -> String {
 
 #[test]
 fn lookupname_unit_test() {
+    let sids = SIDs::new();
+
     let world_name = "Everyone";
     let world_string_sid = "S-1-1-0";
 
     let raw_world_sid = SID::from_account_name(world_name, None).unwrap();
-    assert_ne!(raw_world_sid.len(), 0);
+    assert_eq!(&raw_world_sid, &sids.world);
 
     let sid_string = raw_world_sid.to_string().unwrap();
     assert_ne!(sid_string.len(), 0);
@@ -134,7 +136,7 @@ fn acl_entry_exists(entries: &Vec<ACLEntry>, expected: &ACLEntry) -> Option<usiz
         let entry = &entries[i];
 
         if entry.entry_type == expected.entry_type
-            && entry.sid_to_string() == expected.sid_to_string()
+            && entry.sid == expected.sid
             && entry.flags == expected.flags
             && entry.mask == expected.mask
         {
@@ -145,12 +147,35 @@ fn acl_entry_exists(entries: &Vec<ACLEntry>, expected: &ACLEntry) -> Option<usiz
     None
 }
 
+struct SIDs {
+    current_user: SID,
+    current_domain: SID,
+    guest: SID,
+    world: SID,
+}
+
+impl SIDs {
+    fn new() -> Self {
+        let current_user = SID::current_user().unwrap();
+        let current_domain = current_user.get_domain_of().unwrap(); 
+        let guest = SID::well_known( WinAccountGuestSid, Some(&current_domain) ).unwrap();
+        let world = SID::well_known( WinWorldSid, None ).unwrap();
+
+        assert_eq!( world.to_string().unwrap(), "S-1-1-0" );
+
+        Self {
+            current_user,
+            current_domain,
+            guest,
+            world,
+        }
+    }
+}
+
 // Make sure we can read DACL entries set by an external tool (PowerShell)
 #[test]
 fn query_dacl_unit_test() {
-    let current_user_sid = SID::current_user().unwrap();
-    let current_domain_sid = current_user_sid.get_domain_of().unwrap();
-    let guest_sid = SID::well_known( WinAccountGuestSid, Some(&current_domain_sid) ).unwrap();
+    let sids = SIDs::new();
 
     let mut path_obj = support_path().unwrap_or_default();
     path_obj.push("query_test");
@@ -168,7 +193,7 @@ fn query_dacl_unit_test() {
 
     let mut expected = ACLEntry::new();
     expected.entry_type = AceType::AccessDeny;
-    expected.sid = guest_sid;
+    expected.sid = sids.guest.clone();
     expected.flags = ACE_FLAGS(0);
     expected.mask = (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE;
 
@@ -182,7 +207,7 @@ fn query_dacl_unit_test() {
     };
 
     expected.entry_type = AceType::AccessAllow;
-    expected.sid = current_user_sid;
+    expected.sid = sids.current_user.clone();
     expected.flags = ACE_FLAGS(0);
 
     // NOTE(andy): For ACL entries added by CmdLets on files, SYNCHRONIZE is not set
@@ -200,166 +225,165 @@ fn query_dacl_unit_test() {
     assert!(deny_idx < allow_idx);
 }
 
-// // Make sure we can read SACL entries set by external tools (PowerShell/.NET)
-// #[test]
-// fn query_sacl_unit_test() {
-//     let world_sid = SID::well_known( WELL_KNOWN_SID_TYPE(SECURITY_WORLD_SID_AUTHORITY), None ).unwrap();
+// Make sure we can read SACL entries set by external tools (PowerShell/.NET)
+#[test]
+fn query_sacl_unit_test() {
+    let sids = SIDs::new();
 
-//     let mut path_obj = support_path().unwrap_or_default();
-//     path_obj.push("query_sacl_test");
-//     assert!(path_obj.exists());
+    let mut path_obj = support_path().unwrap_or_default();
+    path_obj.push("query_sacl_test");
+    assert!(path_obj.exists());
 
-//     let path = path_obj.to_str().unwrap_or("");
-//     assert_ne!(path.len(), 0);
+    let path = path_obj.to_str().unwrap_or("");
+    assert_ne!(path.len(), 0);
 
-//     let acl = match ACL::from_file_path(path, true) {
-//         Ok(obj) => obj,
-//         Err(err) => {
-//             assert_eq!(err.code(), ERROR_NOT_ALL_ASSIGNED.into());
-//             println!("INFO: Terminating query_sacl_unit_test early because we are not Admin.");
-//             return;
-//         }
-//     };
+    let acl = match ACL::from_file_path(path, true) {
+        Ok(obj) => obj,
+        Err(err) => {
+            assert_eq!(err.code(), ERROR_NOT_ALL_ASSIGNED.into());
+            println!("INFO: Terminating query_sacl_unit_test early because we are not Admin.");
+            return;
+        }
+    };
 
-//     let entries = acl.all().unwrap_or(Vec::new());
-//     assert_ne!(entries.len(), 0);
+    let entries = acl.all().unwrap_or(Vec::new());
+    assert_ne!(entries.len(), 0);
 
-//     let mut expected = ACLEntry::new();
-//     expected.entry_type = AceType::SystemAudit;
-//     expected.sid = world_sid;
-//     expected.flags = SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG;
-//     expected.mask = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !SYNCHRONIZE;
+    let mut expected = ACLEntry::new();
+    expected.entry_type = AceType::SystemAudit;
+    expected.sid = sids.world.clone();
+    expected.flags = SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG;
+    expected.mask = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !SYNCHRONIZE;
 
-//     let allow_idx = match acl_entry_exists(&entries, &expected) {
-//         Some(i) => i,
-//         None => {
-//             println!("Expected SystemAudit entry does not exist!");
-//             assert!(false);
-//             return;
-//         }
-//     };
+    let allow_idx = match acl_entry_exists(&entries, &expected) {
+        Some(i) => i,
+        None => {
+            println!("Expected SystemAudit entry does not exist!");
+            assert!(false);
+            return;
+        }
+    };
 
-//     assert!(allow_idx > 0);
-// }
+    assert!(allow_idx > 0);
+}
 
 
-// // Ensure that we can add and remove DACL access allow entries
-// fn add_and_remove_dacl_allow(use_handle: bool) {
-//     let current_user = current_user_string_sid();
-//     let current_user_sid = match string_to_sid(&current_user) {
-//         Ok(x) => x,
-//         Err(x) => {
-//             println!("string_to_sid failed for {}: GLE={}", current_user, x);
-//             assert_eq!(x, 0);
-//             return;
-//         }
-//     };
+// Ensure that we can add and remove DACL access allow entries
+fn add_and_remove_dacl_allow(use_handle: bool) {
+    let current_user_sid_string = current_user_string_sid();
+    let current_user_sid = match SID::from_str(&current_user_sid_string) {
+        Ok(x) => x,
+        Err(x) => {
+            println!("string_to_sid failed for {}: GLE={}", current_user_sid_string, x);
+            assert_eq!(x.code(), HRESULT(0));
+            return;
+        }
+    };
 
-//     let mut path_obj = support_path().unwrap_or_default();
-//     path_obj.push(if use_handle {
-//         "dacl_allow_handle"
-//     } else {
-//         "dacl_allow_file"
-//     });
-//     assert!(path_obj.exists());
+    let mut path_obj = support_path().unwrap_or_default();
+    path_obj.push(if use_handle {
+        "dacl_allow_handle"
+    } else {
+        "dacl_allow_file"
+    });
+    assert!(path_obj.exists());
 
-//     let path = path_obj.to_str().unwrap_or("");
-//     assert_ne!(path.len(), 0);
+    let path = path_obj.to_str().unwrap_or("");
+    assert_ne!(path.len(), 0);
 
-//     // NOTE(andy): create() opens for write only or creates new if path doesn't exist. Since we know
-//     //             that the path exists (see line 257), this will attempt to open for write, which
-//     //             should fail
-//     assert!(File::create(path).is_err());
-//     let file: File;
+    // NOTE(andy): create() opens for write only or creates new if path doesn't exist. Since we know
+    //             that the path exists (see line 257), this will attempt to open for write, which
+    //             should fail
+    assert!(File::create(path).is_err());
+    let file: File;
 
-//     let acl_result = if use_handle {
-//         file = OpenOptions::new()
-//             .access_mode((GENERIC_READ | WRITE_DAC).0 )
-//             .open(path)
-//             .unwrap();
-//         ACL::from_file_raw_handle(file.as_raw_handle(), false)
-//     } else {
-//         ACL::from_file_path(path, false)
-//     };
-//     assert!(acl_result.is_ok());
+    let mut acl = if use_handle {
+        file = OpenOptions::new()
+            .access_mode((GENERIC_READ.0 | WRITE_DAC.0) )
+            .open(path)
+            .unwrap();
+        ACL::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
+    } else {
+        ACL::from_file_path(path, false).unwrap()
+    };
 
-//     let mut acl = acl_result.unwrap();
+    match acl.allow(
+        &current_user_sid,
+        false,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+    ) {
+        Ok(x) => assert!(x),
+        Err(x) => {
+            println!(
+                "ACL.allow failed for adding allow ACE for {} to FILE_GENERIC_READ: GLE={}",
+                &current_user_sid_string, x
+            );
+            assert!(false);
+            return;
+        }
+    }
 
-//     match acl.allow(
-//         vec_as_psid(&current_user_sid),
-//         false,
-//         FILE_GENERIC_READ | FILE_GENERIC_WRITE,
-//     ) {
-//         Ok(x) => assert!(x),
-//         Err(x) => {
-//             println!(
-//                 "ACL.allow failed for adding allow ACE for {} to FILE_GENERIC_READ: GLE={}",
-//                 &current_user, x
-//             );
-//             assert!(false);
-//             return;
-//         }
-//     }
+    acl.write().unwrap();
 
-//     // NOTE(andy): Our explicit allow entry should make this pass now
-//     assert!(File::create(path).is_ok());
+    // NOTE(andy): Our explicit allow entry should make this pass now
+    assert!(File::create(path).is_ok());
 
-//     let mut entries = acl.all().unwrap_or(Vec::new());
-//     assert_ne!(entries.len(), 0);
+    let mut entries = acl.all().unwrap_or(Vec::new());
+    assert_ne!(entries.len(), 0);
 
-//     let mut expected = ACLEntry::new();
-//     expected.entry_type = AceType::AccessAllow;
-//     expected.string_sid = current_user.to_string();
-//     expected.flags = 0;
-//     expected.mask = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+    let mut expected = ACLEntry::new();
+    expected.entry_type = AceType::AccessAllow;
+    expected.sid = current_user_sid.clone();
+    expected.flags = ACE_FLAGS(0);
+    expected.mask = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
 
-//     match acl_entry_exists(&entries, &expected) {
-//         Some(_i) => {}
-//         None => {
-//             println!("Expected AccessAllow entry does not exist!");
-//             assert!(false);
-//             return;
-//         }
-//     };
+    match acl_entry_exists(&entries, &expected) {
+        Some(_i) => {}
+        None => {
+            println!("Expected AccessAllow entry does not exist!");
+            assert!(false);
+            return;
+        }
+    };
 
-//     match acl.remove(
-//         vec_as_psid(&current_user_sid),
-//         Some(AceType::AccessAllow),
-//         Some(false),
-//     ) {
-//         Ok(x) => assert_eq!(x, 1),
-//         Err(x) => {
-//             println!(
-//                 "ACL.remove failed for removing allow ACE for {} to FILE_GENERIC_READ: GLE={}",
-//                 &current_user, x
-//             );
-//             assert!(false);
-//             return;
-//         }
-//     }
+    match acl.remove(
+        &current_user_sid,
+        Some(AceType::AccessAllow),
+        Some(false),
+    ) {
+        Ok(x) => assert_eq!(x, 1),
+        Err(x) => {
+            println!(
+                "ACL.remove failed for removing allow ACE for {} to FILE_GENERIC_READ: GLE={}",
+                &current_user_sid_string, x
+            );
+            assert!(false);
+            return;
+        }
+    }
 
-//     assert!(File::create(path).is_err());
+    assert!(File::create(path).is_err());
 
-//     entries = acl.all().unwrap_or(Vec::new());
-//     assert_ne!(entries.len(), 0);
-//     match acl_entry_exists(&entries, &expected) {
-//         None => {}
-//         Some(i) => {
-//             println!("Did not expect to find AccessAllow entry at {}", i);
-//             assert!(false);
-//         }
-//     }
-// }
+    entries = acl.all().unwrap_or(Vec::new());
+    assert_ne!(entries.len(), 0);
+    match acl_entry_exists(&entries, &expected) {
+        None => {}
+        Some(i) => {
+            println!("Did not expect to find AccessAllow entry at {}", i);
+            assert!(false);
+        }
+    }
+}
 
-// #[test]
-// fn add_and_remove_dacl_allow_path_test() {
-//     add_and_remove_dacl_allow(false);
-// }
+#[test]
+fn add_and_remove_dacl_allow_path_test() {
+    add_and_remove_dacl_allow(false);
+}
 
-// #[test]
-// fn add_and_remove_dacl_allow_handle_test() {
-//     add_and_remove_dacl_allow(true);
-// }
+#[test]
+fn add_and_remove_dacl_allow_handle_test() {
+    add_and_remove_dacl_allow(true);
+}
 
 // // Ensure we can add and remove DACL access deny entries
 // fn add_and_remove_dacl_deny(use_handle: bool) {
