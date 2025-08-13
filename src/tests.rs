@@ -1,11 +1,9 @@
 #![cfg(windows)]
 
 use crate::{
-    acl::{
-        ACLEntry, AceType, ACL, ACCESS_MASK,
-    },
+    ACLEntry, ACL, SID,
     utils::{
-        current_user, name_to_sid, sid_to_string, string_to_sid, vec_as_psid,
+        current_user,
     },
 };
 use std::{
@@ -106,11 +104,10 @@ fn run_ps_script(file_name: &str) -> bool {
 }
 
 fn string_sid_by_user(user: &str) -> String {
-    let user_sid = name_to_sid(user, None).unwrap_or_default();
+    let user_sid = SID::from_account_name(user, None).unwrap();
     assert_ne!(user_sid.len(), 0);
 
-    let user_string_sid =
-        unsafe { sid_to_string(vec_as_psid(&user_sid)) }.unwrap_or(String::from(""));
+    let user_string_sid = user_sid.to_string().unwrap().unwrap();
     assert_ne!(user_string_sid.len(), 0);
 
     user_string_sid

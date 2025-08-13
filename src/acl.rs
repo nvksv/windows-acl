@@ -5,12 +5,16 @@
 use core::{
     mem::offset_of,
     ffi::c_void,
-    ptr::{null_mut},
-};
-use crate::utils::{vec_as_pacl, vec_as_pacl_mut, SDSource, SecurityDescriptor, vec_as_psid};
-use std::{
-    fmt,
+    ptr::{null, null_mut},
     mem,
+};
+use crate::{
+    utils::{
+        vec_as_pacl_mut,
+    },
+    sd::{
+        SDSource, SecurityDescriptor,
+    },
 };
 use windows::{
     core::{
@@ -22,13 +26,12 @@ use windows::{
         },
         Security::{
             Authorization::{
-                SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
-                SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
-                SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
+                SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
+                SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
             },
             AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce,
-            CopySid, EqualSid, GetAce, GetAclInformation, GetLengthSid, InitializeAcl, IsValidAcl,
-            IsValidSid, AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
+            GetAce, GetAclInformation, InitializeAcl, IsValidAcl,
+            AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
             ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE,
             ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE,
             ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
@@ -45,7 +48,7 @@ use windows::{
             SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
         },
         Storage::FileSystem::{
-            FILE_GENERIC_READ, FILE_GENERIC_EXECUTE, SYNCHRONIZE, FILE_ALL_ACCESS, FILE_ACCESS_RIGHTS,
+            FILE_ACCESS_RIGHTS,
         }
     },
 };
@@ -61,10 +64,10 @@ use crate::{
 /// `ACL` represents the access control list (discretionary or oth discretionary/system) for a named object
 #[derive(Debug)]
 pub struct ACL {
-    descriptor: Option<SecurityDescriptor>,
+    descriptor: SecurityDescriptor,
     source: SDSource,
-    include_sacl: bool,
     object_type: ObjectType,
+    // include_sacl: bool,
 }
 
 macro_rules! process_entry {
@@ -594,15 +597,15 @@ impl ACL {
         include_sacl: bool,
     ) -> Result<Self> {
         let source = SDSource::Handle(handle);
-        Ok(ACL {
-            descriptor: match SecurityDescriptor::from_source(&source, object_type, include_sacl) {
-                Ok(s) => Some(s),
-                Err(e) => return Err(e),
-            },
-            source,
-            include_sacl,
-            object_type: object_type.into(),
-        })
+        let descriptor = SecurityDescriptor::from_source(&source, object_type, include_sacl)?;
+        Ok(
+            Self {
+                descriptor,
+                source,
+                object_type: object_type.into(),
+                // include_sacl,
+            }
+        )
     }
 
     /// Creates an `ACL` object from a specified file handle.
@@ -618,7 +621,7 @@ impl ACL {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_file_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
-        ACL::from_handle(handle, SE_FILE_OBJECT, include_sacl)
+        Self::from_handle(handle, SE_FILE_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified kernel object handle.
@@ -634,7 +637,7 @@ impl ACL {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_object_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
-        ACL::from_handle(handle, SE_KERNEL_OBJECT, include_sacl)
+        Self::from_handle(handle, SE_KERNEL_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified registry handle.
@@ -655,9 +658,9 @@ impl ACL {
         include_sacl: bool,
     ) -> Result<Self> {
         if is_wow6432key {
-            ACL::from_handle(handle, SE_REGISTRY_WOW64_32KEY, include_sacl)
+            Self::from_handle(handle, SE_REGISTRY_WOW64_32KEY, include_sacl)
         } else {
-            ACL::from_handle(handle, SE_REGISTRY_KEY, include_sacl)
+            Self::from_handle(handle, SE_REGISTRY_KEY, include_sacl)
         }
     }
 
@@ -681,15 +684,15 @@ impl ACL {
         include_sacl: bool,
     ) -> Result<Self> {
         let source = SDSource::Path(path.to_owned());
-        Ok(ACL {
-            descriptor: match SecurityDescriptor::from_source(&source, object_type, include_sacl) {
-                Ok(s) => Some(s),
-                Err(e) => return Err(e),
-            },
-            source,
-            include_sacl,
-            object_type: object_type.into(),
-        })
+        let descriptor = SecurityDescriptor::from_source(&source, object_type, include_sacl)?;
+        Ok(
+            Self {
+                descriptor,
+                source,
+                // include_sacl,
+                object_type: object_type.into(),
+            }
+        )
     }
 
     /// Creates an `ACL` object from a specified file path.
@@ -705,7 +708,7 @@ impl ACL {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_file_path(path: &str, include_sacl: bool) -> Result<Self> {
-        ACL::from_path(path, SE_FILE_OBJECT, include_sacl)
+        Self::from_path(path, SE_FILE_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified kernel object path.
@@ -721,7 +724,7 @@ impl ACL {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_object_path(path: &str, include_sacl: bool) -> Result<Self> {
-        ACL::from_path(path, SE_KERNEL_OBJECT, include_sacl)
+        Self::from_path(path, SE_KERNEL_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified registry path.
@@ -742,9 +745,9 @@ impl ACL {
         include_sacl: bool,
     ) -> Result<Self> {
         if is_wow6432key {
-            ACL::from_path(path, SE_REGISTRY_WOW64_32KEY, include_sacl)
+            Self::from_path(path, SE_REGISTRY_WOW64_32KEY, include_sacl)
         } else {
-            ACL::from_path(path, SE_REGISTRY_KEY, include_sacl)
+            Self::from_path(path, SE_REGISTRY_KEY, include_sacl)
         }
     }
 
@@ -753,20 +756,30 @@ impl ACL {
         self.object_type
     }
 
-    pub fn owner(&self) -> Option<SID> {
-        let owner = &self.descriptor.as_ref()?.psidOwner;
-        if (*owner).is_invalid() {
-            return None;
+    pub fn owner(&self) -> Result<Option<SID>> {
+        let psid = self.descriptor.owner();
+        let sid = match psid {
+            Some(psid) => Some(SID::from_psid(psid)?),
+            None => None,
         };
-        Some(owner)
+        Ok(sid)
     }
 
-    pub fn group(&self) -> Option<&PSID> {
-        let group = &self.descriptor.as_ref()?.psidGroup;
-        if (*group).is_invalid() {
-            return None;
+    pub fn group(&self) -> Result<Option<SID>> {
+        let psid = self.descriptor.group();
+        let sid = match psid {
+            Some(psid) => Some(SID::from_psid(psid)?),
+            None => None,
         };
-        Some(group)
+        Ok(sid)
+    }
+
+    pub fn set_owner(&mut self, owner: SID) -> Result<()> {
+        self.descriptor.set_owner(owner)
+    }
+
+    pub fn set_group(&mut self, group: SID) -> Result<()> {
+        self.descriptor.set_group(group)
     }
 
     /// Returns a `Vec<ACLEntry>` of access control list entries for the specified named object path.
@@ -775,11 +788,9 @@ impl ACL {
             entries: Vec::new(),
         };
 
-        if let Some(ref descriptor) = self.descriptor {
-            for acl in [descriptor.pDacl, descriptor.pSacl].into_iter() {
-                if !acl.is_null() {
-                    enumerate_acl_entries(acl, &mut callback)?;
-                }
+        for acl in [self.descriptor.dacl(), self.descriptor.sacl()].into_iter().filter_map(|p| p) {
+            if !acl.is_null() {
+                enumerate_acl_entries(acl, &mut callback)?;
             }
         }
 
@@ -801,11 +812,9 @@ impl ACL {
             entries: Vec::new(),
         };
 
-        if let Some(ref descriptor) = self.descriptor {
-            for acl in [descriptor.pDacl, descriptor.pSacl].into_iter() {
-                if !acl.is_null() {
-                    enumerate_acl_entries(acl, &mut callback)?;
-                }
+        for acl in [self.descriptor.dacl(), self.descriptor.sacl()].into_iter().filter_map(|p| p) {
+            if !acl.is_null() {
+                enumerate_acl_entries(acl, &mut callback)?;
             }
         }
 
@@ -817,12 +826,10 @@ impl ACL {
     /// # Remarks
     /// This is invoked automatically after any add/remove entry operation.
     pub fn reload(&mut self) -> Result<()> {
-        let descriptor = SecurityDescriptor::from_source(
+        self.descriptor.read(
             &self.source,
             self.object_type().into(),
-            self.include_sacl,
         )?;
-        self.descriptor = Some(descriptor);
         Ok(())
     }
 
@@ -847,47 +854,40 @@ impl ACL {
         flags: ACE_FLAGS,
         mask: FILE_ACCESS_RIGHTS,
     ) -> Result<bool> {
-        let object_type = self.object_type();
-        if let Some(ref mut descriptor) = self.descriptor {
-            let is_dacl;
-            let acl: *const _ACL = match entry_type {
-                AceType::AccessAllow | AceType::AccessDeny => {
-                    is_dacl = true;
-                    descriptor.pDacl
-                }
-                AceType::SystemAudit | AceType::SystemMandatoryLabel => {
-                    is_dacl = false;
-                    descriptor.pSacl
-                },
-                _ => {
-                    return Err(Error::empty());
-                }
-            };
+        let is_dacl;
 
-            // acl may be NULL
-            let mut add_callback = AddEntryCallback::new(acl, sid, entry_type, flags, mask)?;
-
-            if !acl.is_null() {
-                enumerate_acl_entries(acl, &mut add_callback)?;
+        let acl: *const _ACL = match entry_type {
+            AceType::AccessAllow | AceType::AccessDeny => {
+                is_dacl = true;
+                self.descriptor.dacl().unwrap_or(null())
             }
-
-            // NOTE(andy): After enumerating the ACL, we still did not add our ACL, at this point, add it to the end
-            if !add_callback.already_added {
-                add_callback.insert_entry()?;
-                add_callback.already_added = true;
+            AceType::SystemAudit | AceType::SystemMandatoryLabel => {
+                is_dacl = false;
+                self.descriptor.sacl().unwrap_or(null())
+            },
+            _ => {
+                return Err(Error::empty());
             }
+        };
 
-            let new_acl = vec_as_pacl(&add_callback.new_acl);
+        // acl may be NULL
+        let mut add_callback = AddEntryCallback::new(acl, sid, entry_type, flags, mask)?;
 
-            if is_dacl {
-                descriptor.apply(&self.source, object_type.into(), Some(new_acl), None)?;
-            } else {
-                descriptor.apply(&self.source, object_type.into(), None, Some(new_acl))?;
-            };
-
+        if !acl.is_null() {
+            enumerate_acl_entries(acl, &mut add_callback)?;
         }
 
-        self.reload()?;
+        // NOTE(andy): After enumerating the ACL, we still did not add our ACL, at this point, add it to the end
+        if !add_callback.already_added {
+            add_callback.insert_entry()?;
+            add_callback.already_added = true;
+        }
+
+        if is_dacl {
+            self.descriptor.set_dacl(add_callback.new_acl)?;
+        } else {
+            self.descriptor.set_sacl(add_callback.new_acl)?;
+        };
 
         Ok(true)
     }
@@ -911,39 +911,28 @@ impl ACL {
         flags: Option<ACE_FLAGS>,
     ) -> Result<usize> {
         let mut removed_entries_count = 0;
-        let object_type = self.object_type().into();
 
-        if let Some(ref mut descriptor) = self.descriptor {
-            if !descriptor.pDacl.is_null() {
-                let mut dacl_callback = RemoveEntryCallback::new(descriptor.pDacl, sid, entry_type, flags)?;
+        if let Some(dacl) = self.descriptor.dacl() {
+            if !dacl.is_null() {
+                let mut dacl_callback = RemoveEntryCallback::new(dacl, sid, entry_type, flags)?;
 
-                enumerate_acl_entries(descriptor.pDacl, &mut dacl_callback)?;
+                enumerate_acl_entries(dacl, &mut dacl_callback)?;
                 removed_entries_count += dacl_callback.removed_count;
 
-                descriptor.apply(
-                    &self.source,
-                    object_type,
-                    Some(dacl_callback.new_acl.as_ptr() as *const _ACL),
-                    None,
-                )?;
-            };
+                self.descriptor.set_dacl(dacl_callback.new_acl)?;
+            }
+        };
 
-            if !descriptor.pSacl.is_null() {
-                let mut sacl_callback = RemoveEntryCallback::new(descriptor.pSacl, sid, entry_type, flags)?;
+        if let Some(sacl) = self.descriptor.sacl() {
+            if !sacl.is_null() {
+                let mut sacl_callback = RemoveEntryCallback::new(sacl, sid, entry_type, flags)?;
 
-                enumerate_acl_entries(descriptor.pSacl, &mut sacl_callback)?;
+                enumerate_acl_entries(sacl, &mut sacl_callback)?;
                 removed_entries_count += sacl_callback.removed_count;
 
-                descriptor.apply(
-                    &self.source,
-                    object_type,
-                    None,
-                    Some(sacl_callback.new_acl.as_ptr() as *const _ACL),
-                )?;
+                self.descriptor.set_sacl(sacl_callback.new_acl)?;
             }
         }
-
-        self.reload()?;
 
         Ok(removed_entries_count)
     }
@@ -1160,29 +1149,20 @@ impl ACL {
 
         }
 
-        let object_type = self.object_type().into();
-
-        if let Some(ref mut descriptor) = self.descriptor {
-            if is_dacl {
-                descriptor.apply(
-                    &self.source,
-                    object_type,
-                    Some(new_acl.as_ptr() as *mut _ACL),
-                    None,
-                )?;
-            } else {
-                descriptor.apply(
-                    &self.source,
-                    object_type,
-                    None,
-                    Some(new_acl.as_ptr() as *mut _ACL),
-                )?;
-            }
+        if is_dacl {
+            self.descriptor.set_dacl(new_acl)?;
+        } else {
+            self.descriptor.set_sacl(new_acl)?;
         }
 
-        self.reload()?;
-
         Ok(acl.len())
+    }
+
+    pub fn write( &mut self ) -> Result<()> {
+        self.descriptor.write(
+            &self.source,
+            self.object_type.into()
+        )
     }
 }
 

@@ -8,14 +8,13 @@ use std::{
     mem,
     ops::Drop,
     os::windows::ffi::OsStrExt,
-    ptr::{null, null_mut},
 };
 use windows::{
-    core::{Result, Error, PWSTR, HRESULT},
+    core::{
+        Result, Error, PWSTR, 
+    },
     Win32::{
         Foundation::{
-            ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS,
-            HLOCAL, LocalFree,
             CloseHandle, INVALID_HANDLE_VALUE, HANDLE,
         },
         System::{
@@ -27,17 +26,9 @@ use windows::{
             },
         },
         Security::{
-            Authorization::{
-                ConvertSidToStringSidW, ConvertStringSidToSidW,
-                SE_OBJECT_TYPE, GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, 
-                SetSecurityInfo,
-            },
-            AdjustTokenPrivileges, CopySid, GetLengthSid, LookupAccountNameW, LookupPrivilegeValueW,
-            DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-            OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-            PSID, SACL_SECURITY_INFORMATION, SE_PRIVILEGE_ENABLED, SID_NAME_USE,
+            AdjustTokenPrivileges, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED, 
             TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_PRIVILEGES_ATTRIBUTES,
-            ACL as _ACL, OBJECT_SECURITY_INFORMATION,
+            ACL as _ACL, 
         },
     },
 };
@@ -50,11 +41,6 @@ pub(crate) fn as_pvoid_mut<T>( r: &mut T ) -> *mut c_void {
 #[inline(always)]
 pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
     r as *mut _ as *mut *mut c_void
-}
-
-#[inline(always)]
-pub(crate) fn vec_as_psid( sid: &Vec<u8> ) -> PSID {
-    PSID(sid.as_ptr() as *mut c_void)
 }
 
 #[inline(always)]

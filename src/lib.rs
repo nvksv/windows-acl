@@ -5,12 +5,16 @@ mod types;
 mod sid;
 mod sd;
 mod acl_entry;
-pub mod acl;
+mod acl;
 mod utils;
 
+pub use acl::ACL;
+pub use acl_entry::ACLEntry;
+pub use sid::SID;
+
 pub mod helper {
-    pub use crate::utils::{current_user, name_to_sid, sid_to_string, string_to_sid};
+    pub use crate::utils::{current_user};
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 mod tests;
