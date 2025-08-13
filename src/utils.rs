@@ -64,7 +64,7 @@ pub(crate) fn str_to_wstr( r: &str ) -> Vec<u16> {
 // }
 
 /// Retrieves the user name of the current user.
-pub fn current_user() -> Result<String> {
+pub fn current_user_account_name() -> Result<String> {
     let mut username_size: u32 = 0;
 
     unsafe { GetUserNameW(None, &mut username_size) }?;

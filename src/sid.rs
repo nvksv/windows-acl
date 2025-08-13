@@ -11,22 +11,24 @@ use crate::{
 };
 use windows::{
     core::{
-        Error, Result, PWSTR,  
+        Error, Result, HRESULT, PWSTR  
     },
     Win32::{
         Foundation::{
-            HLOCAL, LocalFree, ERROR_INSUFFICIENT_BUFFER,
+            CloseHandle, LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL
         },
         Security::{
             Authorization::{
                 ConvertSidToStringSidW, ConvertStringSidToSidW,
-            },
-            CopySid, EqualSid, GetLengthSid, IsValidSid, PSID, SID_NAME_USE, LookupAccountNameW,
+            }, CopySid, CreateWellKnownSid, EqualSid, GetLengthSid, GetTokenInformation, GetWindowsAccountDomainSid, IsValidSid, LookupAccountNameW, TokenUser, PSID, SID_NAME_USE, TOKEN_QUERY, WELL_KNOWN_SID_TYPE, SID_AND_ATTRIBUTES, SECURITY_MAX_SID_SIZE,
         },
+        System::Threading::{
+                GetCurrentThread, GetCurrentProcess, OpenThreadToken, OpenProcessToken,
+            },
     },
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SID {
     sid: Vec<u8>,
 }
@@ -54,9 +56,47 @@ impl SID {
         }
     }
 
-    // pub fn well_known( id: SID_IDENTIFIER_AUTHORITY ) -> Result<Self> {
+    pub fn well_known( well_known_sid_type: WELL_KNOWN_SID_TYPE, domain_sid: Option<&SID> ) -> Result<Self> {
+        let mut sid_size: u32 = 0;
 
-    // }
+        match unsafe {
+            CreateWellKnownSid(
+                well_known_sid_type, 
+                domain_sid.and_then(|sid| sid.psid()), 
+                None,
+                &mut sid_size
+            )        
+        } {
+            Ok(()) => {
+                return Err(Error::empty());
+            },
+            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+                return Err(e);
+            },
+            Err(_) => {}
+        };
+
+        if sid_size == 0 {
+            return Err(Error::empty());
+        }
+
+        let mut sid = Vec::with_capacity(sid_size as usize);
+
+        unsafe {
+            CreateWellKnownSid(
+                well_known_sid_type, 
+                domain_sid.and_then(|sid| sid.psid()), 
+                Some(PSID(sid.as_mut_ptr() as *mut c_void)),
+                &mut sid_size
+            )        
+        }?;
+
+        unsafe { sid.set_len(sid_size as usize) };
+
+        Ok(Self {
+            sid
+        })
+    }
 
 
     pub fn from_psid( psid: PSID ) -> Result<Self> {
@@ -64,26 +104,97 @@ impl SID {
             return Err(Error::empty());
         }
 
-        let size = unsafe { GetLengthSid(psid) };
-        let mut sid: Vec<u8> = Vec::with_capacity(size as usize);
+        let sid_size = unsafe { GetLengthSid(psid) };
+        let mut sid: Vec<u8> = Vec::with_capacity(sid_size as usize);
 
         unsafe { 
             CopySid(
-                size, 
+                sid_size, 
                 PSID(sid.as_mut_ptr() as *mut c_void), 
                 psid
             )
         }?;
 
-        let sid_ptr = PSID(sid.as_ptr() as *mut c_void);
-        let sid_length = unsafe { GetLengthSid(sid_ptr) };
-        debug_assert!( sid_length == size );
+        unsafe { sid.set_len(sid_size as usize) };
 
         let this = Self { 
             sid
         };
 
         Ok(this)
+    }
+
+    pub fn current_user() -> Result<Self> {
+        let hProcess = unsafe { GetCurrentProcess() };
+        
+        let mut hToken: HANDLE = HANDLE(null_mut());
+        unsafe {
+            OpenProcessToken( 
+                hProcess, 
+                TOKEN_QUERY, 
+                &mut hToken
+            )
+        }?;
+
+        //
+
+        let mut sid_and_attributes_size: u32 = 0;
+
+        match unsafe {
+            GetTokenInformation(
+                hToken, 
+                TokenUser, 
+                None,
+                0, 
+                &mut sid_and_attributes_size
+            )        
+        } {
+            Ok(()) => {
+                unsafe { CloseHandle( hProcess ) }?;
+                return Err(Error::empty());
+            },
+            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+                let _ = unsafe { CloseHandle( hProcess ) };
+                return Err(e);
+            },
+            Err(_) => {}
+        };
+
+        if sid_and_attributes_size == 0 {
+            unsafe { CloseHandle( hProcess ) }?;
+            return Err(Error::empty());
+        }
+
+        let mut sid_and_attributes_buf = Vec::with_capacity(sid_and_attributes_size as usize);
+
+        match unsafe {
+            GetTokenInformation(
+                hToken, 
+                TokenUser, 
+                Some(sid_and_attributes_buf.as_mut_ptr() as *mut c_void),
+                sid_and_attributes_size, 
+                &mut sid_and_attributes_size
+            )        
+        } {
+            Ok(()) => {},
+            Err(e) => {
+                let _ = unsafe { CloseHandle( hProcess ) };
+                return Err(e);
+            }
+        };
+
+        unsafe { CloseHandle( hProcess ) }?;
+
+        unsafe { sid_and_attributes_buf.set_len(sid_and_attributes_size as usize) };
+
+        //
+
+        let sid_and_attributes = sid_and_attributes_buf.as_ptr() as *const SID_AND_ATTRIBUTES;
+        let psid = unsafe{ (*sid_and_attributes).Sid };
+
+        //
+
+        Self::from_psid(psid)
     }
 
     /// Converts a raw SID into a SID string representation.
@@ -93,9 +204,9 @@ impl SID {
     ///
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
-    pub fn to_string( &self ) -> Result<Option<String>> {
+    pub fn to_string( &self ) -> Result<String> {
         if self.is_empty() {
-            return Ok(None);
+            return Ok(String::new());
         }
 
         let mut raw_string_sid: PWSTR = PWSTR::null();
@@ -109,7 +220,7 @@ impl SID {
 
         unsafe { LocalFree(Some(HLOCAL(raw_string_sid.as_ptr() as *mut c_void))) };
 
-        Ok(Some(string_sid))
+        Ok(string_sid)
     }
 
     /// Resolves a system username (either in the format of "user" or "DOMAIN\user") into a raw SID. The raw SID
@@ -152,7 +263,7 @@ impl SID {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() != ERROR_INSUFFICIENT_BUFFER.into() => {
+            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
                 return Err(e);
             },
             Err(_) => {}
@@ -214,6 +325,51 @@ impl SID {
         Ok(Self {
             sid,
         })
+    }
+
+    pub fn get_domain_of( &self ) -> Result<Self> {
+        let Some(psid) = self.psid() else {
+            return Err(Error::empty());
+        };
+
+        let mut domain_sid_size: u32 = 0;
+
+        match unsafe {
+            GetWindowsAccountDomainSid(
+                psid, 
+                None, 
+                &mut domain_sid_size,
+            )        
+        } {
+            Ok(()) => {
+                return Err(Error::empty());
+            },
+            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+                return Err(e);
+            },
+            Err(_) => {}
+        };
+
+        if domain_sid_size == 0 {
+            return Err(Error::empty());
+        }
+
+        let mut domain_sid = Vec::with_capacity(domain_sid_size as usize);
+
+        unsafe {
+            GetWindowsAccountDomainSid(
+                psid, 
+                Some(PSID(domain_sid.as_mut_ptr() as *mut c_void)),
+                &mut domain_sid_size
+            )        
+        }?;
+
+        unsafe { domain_sid.set_len(domain_sid_size as usize) };
+
+        Ok(Self {
+            sid: domain_sid,
+        })
+
     }
 
     #[inline]

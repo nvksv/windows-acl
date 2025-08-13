@@ -11,9 +11,10 @@ mod utils;
 pub use acl::ACL;
 pub use acl_entry::ACLEntry;
 pub use sid::SID;
+pub use types::AceType;
 
 pub mod helper {
-    pub use crate::utils::{current_user};
+    pub use crate::utils::{current_user_account_name};
 }
 
 // #[cfg(test)]

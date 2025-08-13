@@ -73,7 +73,7 @@ impl From<SE_OBJECT_TYPE> for ObjectType {
 
 /// This enum is a almost direct mapping with the values described under `AceType` in
 /// [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AceType {
     Unknown = 0,
     AccessAllow = 1,

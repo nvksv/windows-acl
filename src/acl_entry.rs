@@ -5,6 +5,7 @@
 use core::{
     mem,
 };
+use std::hash::Hash;
 use windows::{
     core::{
         Error, Result,
@@ -26,13 +27,13 @@ use crate::{
 };
 
 /// `ACLEntry` represents a single access control entry in an access control list
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ACLEntry {
     /// The entry's type
     pub entry_type: AceType,
 
-    /// See `AceSize` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
-    pub size: u16,
+    // /// See `AceSize` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
+    // pub size: u16,
 
     /// See `AceFlags` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
     pub flags: ACE_FLAGS,
@@ -51,7 +52,7 @@ impl ACLEntry {
     pub fn new() -> ACLEntry {
         ACLEntry {
             entry_type: AceType::Unknown,
-            size: 0,
+            // size: 0,
             flags: ACE_FLAGS(0),
             mask: FILE_ACCESS_RIGHTS(0),
             sid: SID::empty(),
@@ -59,7 +60,7 @@ impl ACLEntry {
     }
 
     /// The target entity's SID in string representation
-    pub fn string_sid(&self) -> Result<Option<String>> {
+    pub fn sid_to_string(&self) -> Result<String> {
         self.sid.to_string()
     }
 
@@ -81,3 +82,8 @@ impl ACLEntry {
     }
 }
 
+impl Hash for ACLEntry {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.sid.hash(state);
+    }
+}

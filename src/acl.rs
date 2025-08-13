@@ -8,6 +8,7 @@ use core::{
     ptr::{null, null_mut},
     mem,
 };
+use std::os::windows::io::RawHandle;
 use crate::{
     utils::{
         vec_as_pacl_mut,
@@ -79,7 +80,7 @@ macro_rules! process_entry {
 
             $entry.entry_type = $typ;
             $entry.mask = FILE_ACCESS_RIGHTS(unsafe { (*entry_ptr).Mask });
-            $entry.size = unsafe { (*$ptr).AceSize };
+            // $entry.size = unsafe { (*$ptr).AceSize };
             $entry.flags = ACE_FLAGS(unsafe { (*$ptr).AceFlags } as u32);
             $entry.sid = SID::from_psid(pSid)?;
         }
@@ -622,6 +623,10 @@ impl ACL {
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_file_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
         Self::from_handle(handle, SE_FILE_OBJECT, include_sacl)
+    }
+
+    pub fn from_file_raw_handle(handle: RawHandle, include_sacl: bool) -> Result<Self> {
+        Self::from_handle(HANDLE(handle), SE_FILE_OBJECT, include_sacl)
     }
 
     /// Creates an `ACL` object from a specified kernel object handle.
