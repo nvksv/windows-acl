@@ -134,37 +134,25 @@ impl<'r, K: ACLKind> RawACL<'r, K> {
         Ok(entries)
     }
 
+    pub fn add<'e: 'r>( &self, entry: ACLEntry<'e, K> ) -> impl FallibleIterator<Item = ACLEntry<'e, K>>
 
 } 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// pub struct RawVecACL {
-//     raw: Vec<u8>,
-// }
+pub struct RawVecACL {
+    inner: Vec<u8>,
+}
 
-// impl RawVecACL {
-//     pub fn new( raw: *const _ACL ) -> Self {
-//         Self {
-//             raw,
-//             _ph: PhantomData,
-//         }
-//     }
+impl RawVecACL {
+    pub fn new() -> Self {
+        Self {
+            inner: vec![],
+        }
+    }
 
-//     pub fn iter( &self ) -> RawACLIterator<'r> {
-//         RawACLIterator::new(self.raw)
-//     }
 
-//     pub fn for_each<'s>( &'s self, mut f: impl FnMut(ACLEntry<'s>, &'s ACE_HEADER) -> Result<()> ) -> Result<()> where 'r: 's {
-//         let mut iter = self.iter();
-        
-//         while let Some((entry, hdr)) = iter.next()? {
-//             f(entry, hdr)?;
-//         }
-
-//         Ok(())
-//     }
-// } 
+} 
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -291,5 +279,73 @@ impl<'r, K: ACLKind> FallibleIterator for RawACLEntryIterator<'r, K> {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub enum RawACLEntryReplaceResult<'r, K: ACLKind + ?Sized> {
+    Ignore,
+    Remove,
+    Replace(ACLEntry<'r, K>),
+}
+
+pub struct RawACLEntryReplacer<'r, I, K, F>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>>,
+    K: ACLKind + ?Sized,
+    F: FnMut(&<I as FallibleIterator>::Item) -> Result<RawACLEntryReplaceResult<'r, K>>,
+{
+    inner: I,
+    f: F,
+}
+
+impl<'r, I, K, F> RawACLEntryReplacer<'r, I, K, F>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>>,
+    K: ACLKind + ?Sized,
+    F: FnMut(&<I as FallibleIterator>::Item) -> Result<RawACLEntryReplaceResult<'r, K>>,
+{
+    pub fn new( inner: I, f: F ) -> Self {
+        Self {
+            inner,
+            f
+        }
+    }
+}
+
+impl<'r, I, K, F> FallibleIterator for RawACLEntryReplacer<'r, I, K, F>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>>,
+    K: ACLKind + ?Sized,
+    F: FnMut(&<I as FallibleIterator>::Item) -> Result<RawACLEntryReplaceResult<'r, K>>,
+{
+    type Item = ACLEntry<'r, K>;
+    type Error = Error;
+
+    fn next(&mut self) -> Result<Option<Self::Item>> {
+        while let Some(item) = self.inner.next()? {
+            match (self.f)(&item)? {
+                RawACLEntryReplaceResult::Ignore => { 
+                    return Ok(Some(item)); 
+                },
+                RawACLEntryReplaceResult::Remove => { 
+                    continue; 
+                },
+                RawACLEntryReplaceResult::Replace(item) => {
+                    return Ok(Some(item)); 
+                }
+            };
+        }
+    }
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+pub struct RawACLEntryAdder<'r, I, K>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>>,
+    K: ACLKind + ?Sized,
+{
+    inner: I,
+    items: [],
+}
