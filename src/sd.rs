@@ -7,6 +7,7 @@ use core::{
     ptr::null_mut,
     fmt,
 };
+use std::option;
 use windows::{
     core::{Result, Error, PWSTR, HRESULT},
     Win32::{
@@ -28,7 +29,7 @@ use windows::{
 
 use crate::{
     utils::{SystemPrivilege, str_to_wstr, vec_as_pacl, MaybePtr},
-    sid::{SIDRef, VSID},
+    sid::{SID, SIDRef, VSID},
 };
 
 #[derive(Debug)]
@@ -44,11 +45,8 @@ pub struct SecurityDescriptor {
 
     dacl: MaybePtr<*const _ACL, Vec<u8>>,
     sacl: MaybePtr<*const _ACL, Vec<u8>>,
-    owner: VSID<'static>,
-    group: VSID<'static>,
-
-    owner_changed: bool,
-    group_changed: bool,
+    owner: MaybePtr<PSID, SID>,
+    group: MaybePtr<PSID, SID>,
 
     include_sacl: bool,
 }
@@ -59,10 +57,8 @@ impl Default for SecurityDescriptor {
             pSecurityDescriptor: PSECURITY_DESCRIPTOR(null_mut()),
             dacl: MaybePtr::None,
             sacl: MaybePtr::None,
-            owner: VSID::empty(),
-            group: VSID::empty(),
-            owner_changed: false,
-            group_changed: false,
+            owner: MaybePtr::None,
+            group: MaybePtr::None,
             include_sacl: false,
         }
     }
@@ -149,11 +145,8 @@ impl SecurityDescriptor {
         
         self.dacl = if !pDacl.is_null() { MaybePtr::Ptr(pDacl) } else { MaybePtr::None };
         self.sacl = if !pSacl.is_null() { MaybePtr::Ptr(pSacl) } else { MaybePtr::None };
-        self.owner = unsafe { VSID::from_psid_or_empty(pOwner) };
-        self.group = unsafe { VSID::from_psid_or_empty(pOwner) };
-
-        self.owner_changed = false;
-        self.group_changed = false;
+        self.owner = if !pOwner.is_invalid() { MaybePtr::Ptr(pOwner) } else { MaybePtr::None };
+        self.group = if !pGroup.is_invalid() { MaybePtr::Ptr(pGroup) } else { MaybePtr::None };
 
         Ok(())
     }
@@ -195,15 +188,15 @@ impl SecurityDescriptor {
             sacl = Some(vec_as_pacl(sacl_value));
         }
 
-        if self.owner_changed {
+        if let MaybePtr::Value(owner_value) = &self.owner {
             flags |= OWNER_SECURITY_INFORMATION;
-            let psid = self.owner.psid().ok_or_else(|| Error::empty())?;
+            let psid = owner_value.psid().ok_or_else(|| Error::empty())?;
             owner = Some(psid);
         }
 
-        if self.group_changed {
+        if let MaybePtr::Value(group_value) = &self.owner {
             flags |= GROUP_SECURITY_INFORMATION;
-            let psid = self.group.psid().ok_or_else(|| Error::empty())?;
+            let psid = group_value.psid().ok_or_else(|| Error::empty())?;
             group = Some(psid);
         }
 
@@ -274,12 +267,34 @@ impl SecurityDescriptor {
         }
     }
 
-    pub fn owner<'s>( &'s self ) -> &VSID<'s> {
-        &self.owner
+    pub fn owner<'s>( &'s self ) -> Result<Option<SIDRef<'s>>> {
+        match &self.owner {
+            MaybePtr::None => {
+                Ok(None)
+            },
+            MaybePtr::Ptr(psid) => {
+                let sid = unsafe { SIDRef::from_psid(*psid) }?;
+                Ok(Some(sid))
+            },
+            MaybePtr::Value(sid) => {
+                Ok(sid.as_ref())
+            }
+        }
     }
 
-    pub fn group<'s>( &'s self ) -> &VSID<'s> {
-        &self.group
+    pub fn group<'s, 'r>( &'s self ) -> Result<Option<SIDRef<'s>>> {
+        match &self.group {
+            MaybePtr::None => {
+                Ok(None)
+            },
+            MaybePtr::Ptr(psid) => {
+                let sid = unsafe { SIDRef::from_psid(*psid) }?;
+                Ok(Some(sid))
+            },
+            MaybePtr::Value(sid) => {
+                Ok(sid.as_ref())
+            }
+        }
     }
 
     /// Commits a provided discretionary and/or system access control list to the specified named object path.
@@ -307,14 +322,12 @@ impl SecurityDescriptor {
     }
 
     pub fn set_owner<'s>(&mut self, owner: SIDRef<'s>) -> Result<()> {
-        self.owner = owner.to_owned_vsid()?;
-        self.owner_changed = true;
+        self.owner = MaybePtr::Value(owner.to_sid()?);
         Ok(())
     }
 
     pub fn set_group<'s>(&mut self, group: SIDRef<'s>) -> Result<()> {
-        self.group = group.to_owned_vsid()?;
-        self.group_changed = true;
+        self.group = MaybePtr::Value(group.to_sid()?);
         Ok(())
     }
 }
@@ -330,6 +343,24 @@ impl Drop for SecurityDescriptor {
 impl fmt::Debug for MaybePtr<*const _ACL, Vec<u8>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("ACL");
+        let f = match self {
+            MaybePtr::None => {
+                f.field(&"None")
+            },
+            MaybePtr::Ptr(p) => {
+                f.field(p)
+            },
+            MaybePtr::Value(v) => {
+                f.field(v)
+            }
+        };
+        f.finish()
+    }
+}
+
+impl fmt::Debug for MaybePtr<PSID, SID> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = f.debug_tuple("SID");
         let f = match self {
             MaybePtr::None => {
                 f.field(&"None")

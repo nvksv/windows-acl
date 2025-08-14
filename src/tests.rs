@@ -87,17 +87,13 @@ fn run_ps_script(file_name: &str) -> bool {
 
 fn string_sid_by_user(user: &str) -> String {
     let user_sid = SID::from_account_name(user, None).unwrap();
-    assert_ne!(user_sid.len(), 0);
-
     let user_string_sid = user_sid.to_string().unwrap();
-    assert_ne!(user_string_sid.len(), 0);
 
     user_string_sid
 }
 
 fn current_user_string_sid() -> String {
-    let username = current_user_account_name().unwrap_or(String::from(""));
-    assert_ne!(username.len(), 0);
+    let username = current_user_account_name().unwrap();
 
     string_sid_by_user(&username)
 }
@@ -113,8 +109,6 @@ fn lookupname_unit_test() {
     assert_eq!(&raw_world_sid, &sids.world);
 
     let sid_string = raw_world_sid.to_string().unwrap();
-    assert_ne!(sid_string.len(), 0);
-
     assert_eq!(sid_string, world_string_sid);
 }
 
@@ -123,11 +117,8 @@ fn sidstring_unit_test() {
     let world_string_sid = "S-1-5-21";
 
     let sid = SID::from_str(world_string_sid).unwrap();
-    assert_ne!(sid.len(), 0);
 
     let sid_string = sid.to_string().unwrap();
-    assert_ne!(sid_string.len(), 0);
-
     assert_eq!(sid_string, world_string_sid);
 }
 
@@ -135,11 +126,7 @@ fn acl_entry_exists(entries: &Vec<ACLEntry>, expected: &ACLEntry) -> Option<usiz
     for i in 0..(entries.len()) {
         let entry = &entries[i];
 
-        if entry.entry_type == expected.entry_type
-            && entry.sid == expected.sid
-            && entry.flags == expected.flags
-            && entry.mask == expected.mask
-        {
+        if entry == expected {
             return Some(i);
         }
     }
@@ -181,21 +168,20 @@ fn query_dacl_unit_test() {
     path_obj.push("query_test");
     assert!(path_obj.exists());
 
-    let path = path_obj.to_str().unwrap_or("");
-    assert_ne!(path.len(), 0);
+    let path = path_obj.to_str().unwrap();
 
     let acl_result = ACL::from_file_path(path, false);
     assert!(acl_result.is_ok());
 
     let acl = acl_result.unwrap();
-    let entries = acl.all().unwrap_or_default();
+    let entries = acl.all().unwrap();
     assert_ne!(entries.len(), 0);
 
     let mut expected = ACLEntry::new();
     expected.entry_type = AceType::AccessDeny;
     expected.sid = sids.guest.to_vsid().unwrap();
     expected.flags = ACE_FLAGS(0);
-    expected.mask = (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE;
+    expected.access_mask = ((FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE).into();
 
     let deny_idx = match acl_entry_exists(&entries, &expected) {
         Some(i) => i,
@@ -211,7 +197,7 @@ fn query_dacl_unit_test() {
     expected.flags = ACE_FLAGS(0);
 
     // NOTE(andy): For ACL entries added by CmdLets on files, SYNCHRONIZE is not set
-    expected.mask = FILE_ALL_ACCESS;
+    expected.access_mask = FILE_ALL_ACCESS.into();
 
     let allow_idx = match acl_entry_exists(&entries, &expected) {
         Some(i) => i,
@@ -230,12 +216,11 @@ fn query_dacl_unit_test() {
 fn query_sacl_unit_test() {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap_or_default();
+    let mut path_obj = support_path().unwrap();
     path_obj.push("query_sacl_test");
     assert!(path_obj.exists());
 
-    let path = path_obj.to_str().unwrap_or("");
-    assert_ne!(path.len(), 0);
+    let path = path_obj.to_str().unwrap();
 
     let acl = match ACL::from_file_path(path, true) {
         Ok(obj) => obj,
@@ -246,14 +231,13 @@ fn query_sacl_unit_test() {
         }
     };
 
-    let entries = acl.all().unwrap_or(Vec::new());
-    assert_ne!(entries.len(), 0);
+    let entries = acl.all().unwrap();
 
     let mut expected = ACLEntry::new();
     expected.entry_type = AceType::SystemAudit;
     expected.sid = sids.world.to_vsid().unwrap();
     expected.flags = SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG;
-    expected.mask = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !SYNCHRONIZE;
+    expected.access_mask = ((FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !SYNCHRONIZE).into();
 
     let allow_idx = match acl_entry_exists(&entries, &expected) {
         Some(i) => i,
@@ -280,7 +264,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
         }
     };
 
-    let mut path_obj = support_path().unwrap_or_default();
+    let mut path_obj = support_path().unwrap();
     path_obj.push(if use_handle {
         "dacl_allow_handle"
     } else {
@@ -301,7 +285,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
 
     let mut acl = if use_handle {
         file = OpenOptions::new()
-            .access_mode((GENERIC_READ.0 | WRITE_DAC.0) )
+            .access_mode(GENERIC_READ.0 | WRITE_DAC.0 )
             .open(path)
             .unwrap();
         ACL::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
@@ -312,7 +296,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     match acl.allow(
         current_user_sid.as_ref().unwrap(),
         false,
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+        (FILE_GENERIC_READ | FILE_GENERIC_WRITE).into(),
     ) {
         Ok(x) => assert!(x),
         Err(x) => {
@@ -336,7 +320,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     expected.entry_type = AceType::AccessAllow;
     expected.sid = current_user_sid.clone();
     expected.flags = ACE_FLAGS(0);
-    expected.mask = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+    expected.access_mask = (FILE_GENERIC_READ | FILE_GENERIC_WRITE).into();
 
     match acl_entry_exists(&entries, &expected) {
         Some(_i) => {}

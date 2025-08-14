@@ -7,8 +7,11 @@ use core::{
     ffi::c_void,
     ptr::{null, null_mut},
     mem,
+    marker::PhantomData,
 };
-use std::os::windows::io::RawHandle;
+use std::{
+    os::windows::io::RawHandle
+};
 use windows::{
     core::{
         Error, Result,
@@ -41,16 +44,25 @@ use windows::{
             SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
         },
         Storage::FileSystem::{
-            FILE_ACCESS_RIGHTS,
+            // FILE_ACCESS_RIGHTS,
         }
     },
 };
-
+use fallible_iterator::FallibleIterator;
 use crate::{
-    acl_entry::ACLEntry, sd::{
+    acl_entry::ACLEntry, 
+    sd::{
         SDSource, SecurityDescriptor,
-    }, sid::{SIDRef, VSID}, types::*, utils::{as_ppvoid_mut, as_pvoid_mut, vec_as_pacl_mut}
+    }, 
+    sid::{SIDRef, VSID}, 
+    raw_acl::{
+        RawACL
+    },
+    types::*, 
+    utils::{as_ppvoid_mut, as_pvoid_mut, vec_as_pacl_mut, parse_dacl_ace, parse_sacl_ace, acl_size}
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// `ACL` represents the access control list (discretionary or oth discretionary/system) for a named object
 #[derive(Debug)]
@@ -61,274 +73,119 @@ pub struct ACL {
     // include_sacl: bool,
 }
 
-macro_rules! process_entry {
-    ($entry: ident, $typ: path, $ptr: ident => $cls: path) => {
-        {
-            let entry_ptr: *mut $cls = $ptr as *mut $cls;
-            let sid_offset = offset_of!($cls, SidStart);
-            let pSid: PSID = PSID(entry_ptr.wrapping_byte_add(sid_offset) as *mut _);
-
-            $entry.entry_type = $typ;
-            $entry.mask = FILE_ACCESS_RIGHTS(unsafe { (*entry_ptr).Mask });
-            // $entry.size = unsafe { (*$ptr).AceSize };
-            $entry.flags = ACE_FLAGS(unsafe { (*$ptr).AceFlags } as u32);
-            $entry.sid = unsafe{ VSID::from_psid(pSid) }?;
-        }
-    };
-}
-
-enum EntryCallbackResult {
-    Continue,
-    Break,
-}
-
-trait EntryCallback<'e> {
-    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult>;
-}
-
-fn acl_size(pacl: *const _ACL) -> Result<u32> {
-    if pacl.is_null() {
-        return Ok(mem::size_of::<_ACL>() as u32);
-    }
-
-    let mut si: ACL_SIZE_INFORMATION = unsafe { mem::zeroed::<ACL_SIZE_INFORMATION>() };
-
-    if !unsafe { IsValidAcl(pacl) }.as_bool() {
-        return Err(Error::empty());
-    }
-
-    unsafe { 
-        GetAclInformation(
-            pacl,
-            as_pvoid_mut(&mut si),
-            mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-            AclSizeInformation,
-        )
-    }?;
-
-    Ok(si.AclBytesInUse)
-}
-
-pub(crate) fn acl_entry_size(entry_type: AceType) -> Result<u32> {
-    match entry_type {
-        AceType::AccessAllow => {
-            Ok(mem::size_of::<ACCESS_ALLOWED_ACE>() as u32)
-        },
-        AceType::AccessAllowCallback => {
-            Ok(mem::size_of::<ACCESS_ALLOWED_CALLBACK_ACE>() as u32)
-        }
-        AceType::AccessAllowObject => {
-            Ok(mem::size_of::<ACCESS_ALLOWED_OBJECT_ACE>() as u32)
-        },
-        AceType::AccessAllowCallbackObject => {
-            Ok(mem::size_of::<ACCESS_ALLOWED_CALLBACK_OBJECT_ACE>() as u32)
-        }
-        AceType::AccessDeny => {
-            Ok(mem::size_of::<ACCESS_DENIED_ACE>() as u32)
-        },
-        AceType::AccessDenyCallback => {
-            Ok(mem::size_of::<ACCESS_DENIED_CALLBACK_ACE>() as u32)
-        },
-        AceType::AccessDenyObject => {
-            Ok(mem::size_of::<ACCESS_DENIED_OBJECT_ACE>() as u32)
-        },
-        AceType::AccessDenyCallbackObject => {
-            Ok(mem::size_of::<ACCESS_DENIED_CALLBACK_OBJECT_ACE>() as u32)
-        }
-        AceType::SystemAudit => {
-            Ok(mem::size_of::<SYSTEM_AUDIT_ACE>() as u32)
-        },
-        AceType::SystemAuditCallback => {
-            Ok(mem::size_of::<SYSTEM_AUDIT_CALLBACK_ACE>() as u32)
-        },
-        AceType::SystemAuditObject => {
-            Ok(mem::size_of::<SYSTEM_AUDIT_OBJECT_ACE>() as u32)
-        },
-        AceType::SystemAuditCallbackObject => {
-            Ok(mem::size_of::<SYSTEM_AUDIT_CALLBACK_OBJECT_ACE>() as u32)
-        }
-        AceType::SystemMandatoryLabel => {
-            Ok(mem::size_of::<SYSTEM_MANDATORY_LABEL_ACE>() as u32)
-        }
-        AceType::SystemResourceAttribute => {
-            Ok(mem::size_of::<SYSTEM_RESOURCE_ATTRIBUTE_ACE>() as u32)
-        }
-        _ => {
-            Err(Error::empty())
-        },
-    }
-}
-
-fn enumerate_acl_entries<'e, T: EntryCallback<'e>>(pAcl: *const _ACL, callback: &mut T) -> Result<()> {
-    if pAcl.is_null() {
-        return Err(Error::empty());
-    }
-
-    let mut hdr: *mut ACE_HEADER = null_mut();
-    let ace_count = unsafe { (*pAcl).AceCount };
-
-    for i in 0..ace_count {
-        unsafe { 
-            GetAce(
-                pAcl,
-                i as u32,
-                as_ppvoid_mut(&mut hdr)
-            )
-        }?;
-
-        let mut entry = ACLEntry::new();
-
-        match unsafe { (*hdr).AceType } as u32 {
-            ACCESS_ALLOWED_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessAllow,
-                    hdr => ACCESS_ALLOWED_ACE
-                )
-            },
-            ACCESS_ALLOWED_CALLBACK_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessAllowCallback,
-                    hdr => ACCESS_ALLOWED_CALLBACK_ACE
-                )
-            },
-            ACCESS_ALLOWED_OBJECT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessAllowObject,
-                    hdr => ACCESS_ALLOWED_OBJECT_ACE
-                )
-            },
-            ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessAllowCallbackObject,
-                    hdr => ACCESS_ALLOWED_CALLBACK_OBJECT_ACE
-                )
-            },
-            ACCESS_DENIED_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessDeny,
-                    hdr => ACCESS_DENIED_ACE
-                )
-            },
-            ACCESS_DENIED_CALLBACK_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessDenyCallback,
-                    hdr => ACCESS_DENIED_CALLBACK_ACE
-                )
-            },
-            ACCESS_DENIED_OBJECT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessDenyObject,
-                    hdr => ACCESS_DENIED_OBJECT_ACE
-                )
-            },
-            ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::AccessDenyCallbackObject,
-                    hdr => ACCESS_DENIED_CALLBACK_OBJECT_ACE
-                )
-            },
-            SYSTEM_AUDIT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::SystemAudit,
-                    hdr => SYSTEM_AUDIT_ACE
-                )
-            },
-            SYSTEM_AUDIT_CALLBACK_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::SystemAuditCallback,
-                    hdr => SYSTEM_AUDIT_CALLBACK_ACE
-                )
-            },
-            SYSTEM_AUDIT_OBJECT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::SystemAuditObject,
-                    hdr => SYSTEM_AUDIT_OBJECT_ACE
-                )
-            },
-            SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::SystemAuditCallbackObject,
-                    hdr => SYSTEM_AUDIT_CALLBACK_OBJECT_ACE
-                )
-            },
-            SYSTEM_MANDATORY_LABEL_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::SystemMandatoryLabel,
-                    hdr => SYSTEM_MANDATORY_LABEL_ACE
-                )
-            },
-            SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE => {
-                process_entry!(
-                    entry,
-                    AceType::SystemResourceAttribute,
-                    hdr => SYSTEM_RESOURCE_ATTRIBUTE_ACE
-                )
-            },
-            _ => {}
-        }
-
-        match callback.on_entry(hdr, entry)? {
-            EntryCallbackResult::Continue => {},
-            EntryCallbackResult::Break => {
-                break;
-            }
-        }
-    }
-
-    Ok(())
-}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct GetEntryCallback<'r, 's> {
-    entries: Vec<ACLEntry<'r>>,
-    target_sid: SIDRef<'s>,
-    target_type: Option<AceType>,
-}
+// enum EntryCallbackResult {
+//     Continue,
+//     Break,
+// }
 
-impl<'r, 's, 'e: 'r> EntryCallback<'e> for GetEntryCallback<'r, 's> {
-    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
-        if !entry.sid.eq_to_ref(self.target_sid) {
-            return Ok(EntryCallbackResult::Continue);
-        }
-
-        if let Some(ref t) = self.target_type {
-            if entry.entry_type != *t {
-                return Ok(EntryCallbackResult::Continue);
-            }
-        }
-
-        self.entries.push(entry);
-
-        Ok(EntryCallbackResult::Continue)
-    }
-}
+// trait EntryCallback<'e> {
+//     fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult>;
+// }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct AllEntryCallback<'r> {
-    entries: Vec<ACLEntry<'r>>,
+pub struct DACL {}
+pub struct SACL {}
+
+pub trait ACLKind: private::Sealed {
+    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>>;
 }
 
-impl<'r, 'e: 'r> EntryCallback<'e> for AllEntryCallback<'r> {
-    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
-        self.entries.push(entry);
-        Ok(EntryCallbackResult::Continue)
+impl ACLKind for DACL {
+    #[inline(always)]
+    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> {
+        parse_dacl_ace(hdr)
     }
 }
+
+impl ACLKind for SACL {
+    #[inline(always)]
+    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> {
+        parse_sacl_ace(hdr)
+    }
+}
+
+impl private::Sealed for DACL {}
+impl private::Sealed for SACL {}
+
+mod private {
+    pub(crate) trait Sealed {}
+
+}
+
+
+
+// fn enumerate_acl_entries<'e, T: EntryCallback<'e>>(pAcl: *const _ACL, callback: &mut T) -> Result<()> {
+//     if pAcl.is_null() {
+//         return Err(Error::empty());
+//     }
+
+//     let mut hdr: *mut ACE_HEADER = null_mut();
+//     let ace_count = unsafe { (*pAcl).AceCount };
+
+//     for i in 0..ace_count {
+//         unsafe { 
+//             GetAce(
+//                 pAcl,
+//                 i as u32,
+//                 as_ppvoid_mut(&mut hdr)
+//             )
+//         }?;
+
+
+//         match callback.on_entry(hdr, entry)? {
+//             EntryCallbackResult::Continue => {},
+//             EntryCallbackResult::Break => {
+//                 break;
+//             }
+//         }
+//     }
+
+//     Ok(())
+// }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// struct GetEntryCallback<'r, 's> {
+//     entries: Vec<ACLEntry<'r>>,
+//     target_sid: SIDRef<'s>,
+//     target_type: Option<AceType>,
+// }
+
+// impl<'r, 's, 'e: 'r> EntryCallback<'e> for GetEntryCallback<'r, 's> {
+//     fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
+//         if !entry.sid.eq_to_ref(self.target_sid) {
+//             return Ok(EntryCallbackResult::Continue);
+//         }
+
+//         if let Some(ref t) = self.target_type {
+//             if entry.entry_type != *t {
+//                 return Ok(EntryCallbackResult::Continue);
+//             }
+//         }
+
+//         self.entries.push(entry);
+
+//         Ok(EntryCallbackResult::Continue)
+//     }
+// }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// struct AllEntryCallback<'r> {
+//     entries: Vec<ACLEntry<'r>>,
+// }
+
+// impl<'r, 'e: 'r> EntryCallback<'e> for AllEntryCallback<'r> {
+//     fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
+//         self.entries.push(entry);
+//         Ok(EntryCallbackResult::Continue)
+//     }
+// }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -337,7 +194,7 @@ struct AddEntryCallback<'s> {
     entry_sid: SIDRef<'s>,
     entry_type: AceType,
     entry_flags: ACE_FLAGS,
-    entry_mask: FILE_ACCESS_RIGHTS,
+    entry_mask: ACCESS_MASK,
     already_added: bool,
 }
 
@@ -347,7 +204,7 @@ impl<'s> AddEntryCallback<'s> {
         sid: SIDRef<'s>,
         entry_type: AceType,
         flags: ACE_FLAGS,
-        mask: FILE_ACCESS_RIGHTS,
+        mask: ACCESS_MASK,
     ) -> Result<Self> {
         let mut new_acl_size = acl_size(old_acl)?;
         new_acl_size += ACLEntry::calculate_entry_size(entry_type, sid)?;
@@ -738,17 +595,19 @@ impl ACL {
         }
     }
 
+    //
+
     /// Returns the `ObjectType` of the target named object path as specified during the creation of the `ACL` object
     pub fn object_type(&self) -> ObjectType {
         self.object_type
     }
 
     pub fn owner<'s>(&'s self) -> Result<Option<SIDRef<'s>>> {
-        Ok(self.descriptor.owner().as_ref())
+        self.descriptor.owner()
     }
 
     pub fn group<'s>(&'s self) -> Result<Option<SIDRef<'s>>> {
-        Ok(self.descriptor.group().as_ref())
+        self.descriptor.group()
     }
 
     pub fn set_owner<'s>(&mut self, owner: SIDRef<'s>) -> Result<()> {
@@ -759,44 +618,19 @@ impl ACL {
         self.descriptor.set_group(group)
     }
 
-    /// Returns a `Vec<ACLEntry>` of access control list entries for the specified named object path.
-    pub fn all(&self) -> Result<Vec<ACLEntry>> {
-        let mut callback = AllEntryCallback {
-            entries: Vec::new(),
-        };
+    //
 
-        for acl in [self.descriptor.dacl(), self.descriptor.sacl()].into_iter().filter_map(|p| p) {
-            if !acl.is_null() {
-                enumerate_acl_entries(acl, &mut callback)?;
-            }
-        }
-
-        Ok(callback.entries)
+    pub fn dacl( &self ) -> RawACL<DACL> {
+        let dacl = self.descriptor.dacl().unwrap_or(null());
+        RawACL::from_ptr(dacl)
     }
 
-    /// Retrieves a list of access control entries matching the target SID entity and optionally, a access control entry type.
-    ///
-    /// # Arguments
-    /// * `sid` - The raw SID of the target entity.
-    /// * `entry_type` - The access control entry type or `None`.
-    ///
-    /// # Errors
-    /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn get<'s>(&self, sid: SIDRef<'s>, entry_type: Option<AceType>) -> Result<Vec<ACLEntry>> {
-        let mut callback = GetEntryCallback {
-            target_sid: sid,
-            target_type: entry_type,
-            entries: Vec::new(),
-        };
-
-        for acl in [self.descriptor.dacl(), self.descriptor.sacl()].into_iter().filter_map(|p| p) {
-            if !acl.is_null() {
-                enumerate_acl_entries(acl, &mut callback)?;
-            }
-        }
-
-        Ok(callback.entries)
+    pub fn sacl( &self ) -> RawACL<SACL> {
+        let sacl = self.descriptor.sacl().unwrap_or(null());
+        RawACL::from_ptr(sacl)
     }
+
+    //
 
     /// Update the current named object path's security descriptor. Returns a boolean denoting the status of the reload operation.
     ///
@@ -829,7 +663,7 @@ impl ACL {
         sid: SIDRef<'s>,
         entry_type: AceType,
         flags: ACE_FLAGS,
-        mask: FILE_ACCESS_RIGHTS,
+        mask: ACCESS_MASK,
     ) -> Result<bool> {
         let is_dacl;
 
@@ -926,13 +760,13 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn allow<'s>(&mut self, sid: SIDRef<'s>, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
+    pub fn allow<'s>(&mut self, sid: SIDRef<'s>, inheritable: bool, access_mask: ACCESS_MASK) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
         if inheritable {
             flags = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
         }
-        self.add_entry(sid, AceType::AccessAllow, flags, mask)
+        self.add_entry(sid, AceType::AccessAllow, flags, access_mask)
     }
 
     /// Adds an access deny entry to the access control list.
@@ -947,7 +781,7 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn deny<'s>(&mut self, sid: SIDRef<'s>, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
+    pub fn deny<'s>(&mut self, sid: SIDRef<'s>, inheritable: bool, mask: ACCESS_MASK) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
         if inheritable {
@@ -974,7 +808,7 @@ impl ACL {
         &mut self,
         sid: SIDRef<'s>,
         inheritable: bool,
-        mask: FILE_ACCESS_RIGHTS,
+        mask: ACCESS_MASK,
         audit_success: bool,
         audit_fails: bool,
     ) -> Result<bool> {
@@ -1011,7 +845,7 @@ impl ACL {
         &mut self,
         label_sid: SIDRef<'s>,
         inheritable: bool,
-        policy: FILE_ACCESS_RIGHTS,
+        policy: ACCESS_MASK,
     ) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
@@ -1076,10 +910,10 @@ impl ACL {
                 AceType::AccessAllow => {
                     unsafe {
                         AddAccessAllowedAceEx(
-                            new_acl.as_mut_ptr() as *mut _ACL,
+                            vec_as_pacl_mut(&mut new_acl),
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask.0,
+                            ace.access_mask.0,
                             psid,
                         )
                     }?;
@@ -1087,10 +921,10 @@ impl ACL {
                 AceType::AccessDeny => {
                     unsafe {
                         AddAccessDeniedAceEx(
-                            new_acl.as_mut_ptr() as *mut _ACL,
+                            vec_as_pacl_mut(&mut new_acl),
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask.0,
+                            ace.access_mask.0,
                             psid,
                         )
                     }?;
@@ -1098,10 +932,10 @@ impl ACL {
                 AceType::SystemAudit => {
                     unsafe {
                         AddAuditAccessAceEx(
-                            new_acl.as_mut_ptr() as *mut _ACL,
+                            vec_as_pacl_mut(&mut new_acl),
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask.0,
+                            ace.access_mask.0,
                             psid,
                             false,
                             false,
@@ -1111,10 +945,10 @@ impl ACL {
                 AceType::SystemMandatoryLabel => {
                     unsafe {
                         AddMandatoryAce(
-                            new_acl.as_mut_ptr() as *mut _ACL,
+                            vec_as_pacl_mut(&mut new_acl),
                             ACL_REVISION_DS,
                             ace.flags,
-                            ace.mask.0,
+                            ace.access_mask.0,
                             psid,
                         )
                     }?;
