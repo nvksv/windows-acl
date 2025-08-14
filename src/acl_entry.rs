@@ -4,8 +4,8 @@
 
 use core::{
     mem,
+    hash,
 };
-use std::hash::Hash;
 use windows::{
     core::{
         Error, Result,
@@ -23,17 +23,18 @@ use windows::{
 use crate::{
     acl::acl_entry_size,
     types::*,
-    sid::SID,
+    sid::{SID, SIDRef, VSID},
+    utils::MaybePtr,
 };
 
 /// `ACLEntry` represents a single access control entry in an access control list
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ACLEntry {
+pub struct ACLEntry<'r> {
     /// The entry's type
     pub entry_type: AceType,
 
-    // /// See `AceSize` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
-    // pub size: u16,
+    /// See `AceSize` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
+    pub size: u16,
 
     /// See `AceFlags` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
     pub flags: ACE_FLAGS,
@@ -42,20 +43,20 @@ pub struct ACLEntry {
     pub mask: FILE_ACCESS_RIGHTS,
 
     /// The target entity's raw SID
-    pub sid: SID,
+    pub sid: VSID<'r>,
 }
 
 #[allow(dead_code)]
-impl ACLEntry {
+impl<'r> ACLEntry<'r> {
     /// Returns an `ACLEntry` object with default values.
     #[inline]
-    pub fn new() -> ACLEntry {
-        ACLEntry {
+    pub fn new() -> Self {
+        Self {
             entry_type: AceType::Unknown,
-            // size: 0,
+            size: 0,
             flags: ACE_FLAGS(0),
             mask: FILE_ACCESS_RIGHTS(0),
-            sid: SID::empty(),
+            sid: VSID::empty(),
         }
     }
 
@@ -69,21 +70,21 @@ impl ACLEntry {
     }
 
     pub fn size(&self) -> Result<u32> {
-        Self::calculate_entry_size( self.entry_type, &self.sid )
+        let sid = self.sid.as_ref().ok_or_else(|| Error::empty())?;
+        Self::calculate_entry_size( self.entry_type, sid )
     }
 
-    pub fn calculate_entry_size(entry_type: AceType, sid: &SID) -> Result<u32> {
-        if sid.is_empty() {
-            return Err(Error::empty());
-        }
-        
+    pub fn calculate_entry_size<'s>(entry_type: AceType, sid: SIDRef<'s>) -> Result<u32> {
         let size = acl_entry_size(entry_type)? + sid.len() - (mem::size_of::<u32>() as u32);
         Ok(size)
     }
 }
 
-impl Hash for ACLEntry {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.sid.hash(state);
+impl<'r> hash::Hash for ACLEntry<'r> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        hash::Hash::hash(&self.entry_type, state);
+        hash::Hash::hash(&self.flags.0, state);
+        hash::Hash::hash(&self.mask.0, state);
+        hash::Hash::hash(&self.sid, state);
     }
 }

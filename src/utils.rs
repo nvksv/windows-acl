@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case)]
 
+use core::fmt;
 use std::{
     ffi::{c_void, OsStr},
     iter::once,
@@ -33,6 +34,16 @@ use windows::{
     },
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub enum MaybePtr<P, V> {
+    None,
+    Ptr(P),
+    Value(V),
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #[inline(always)]
 pub(crate) fn as_pvoid_mut<T>( r: &mut T ) -> *mut c_void {
     r as *mut _ as *mut c_void
@@ -62,6 +73,8 @@ pub(crate) fn str_to_wstr( r: &str ) -> Vec<u16> {
 // pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
 //     r as *mut _ as *mut *mut c_void
 // }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Retrieves the user name of the current user.
 pub fn current_user_account_name() -> Result<String> {
@@ -148,6 +161,7 @@ fn set_privilege(name: &str, is_enabled: bool) -> Result<bool> {
     Ok(is_enabled)
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
 pub struct SystemPrivilege {

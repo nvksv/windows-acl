@@ -10,7 +10,7 @@ mod utils;
 
 pub use acl::ACL;
 pub use acl_entry::ACLEntry;
-pub use sid::SID;
+pub use sid::{SID, SIDRef, VSID};
 pub use types::AceType;
 
 pub mod helper {

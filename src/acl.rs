@@ -9,14 +9,6 @@ use core::{
     mem,
 };
 use std::os::windows::io::RawHandle;
-use crate::{
-    utils::{
-        vec_as_pacl_mut,
-    },
-    sd::{
-        SDSource, SecurityDescriptor,
-    },
-};
 use windows::{
     core::{
         Error, Result,
@@ -55,12 +47,10 @@ use windows::{
 };
 
 use crate::{
-    utils::{as_pvoid_mut, as_ppvoid_mut},
-    types::*,
-    sid::SID,
-    acl_entry::ACLEntry,
+    acl_entry::ACLEntry, sd::{
+        SDSource, SecurityDescriptor,
+    }, sid::{SIDRef, VSID}, types::*, utils::{as_ppvoid_mut, as_pvoid_mut, vec_as_pacl_mut}
 };
-
 
 /// `ACL` represents the access control list (discretionary or oth discretionary/system) for a named object
 #[derive(Debug)]
@@ -82,7 +72,7 @@ macro_rules! process_entry {
             $entry.mask = FILE_ACCESS_RIGHTS(unsafe { (*entry_ptr).Mask });
             // $entry.size = unsafe { (*$ptr).AceSize };
             $entry.flags = ACE_FLAGS(unsafe { (*$ptr).AceFlags } as u32);
-            $entry.sid = SID::from_psid(pSid)?;
+            $entry.sid = unsafe{ VSID::from_psid(pSid) }?;
         }
     };
 }
@@ -92,8 +82,8 @@ enum EntryCallbackResult {
     Break,
 }
 
-trait EntryCallback {
-    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult>;
+trait EntryCallback<'e> {
+    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult>;
 }
 
 fn acl_size(pacl: *const _ACL) -> Result<u32> {
@@ -169,7 +159,7 @@ pub(crate) fn acl_entry_size(entry_type: AceType) -> Result<u32> {
     }
 }
 
-fn enumerate_acl_entries<T: EntryCallback>(pAcl: *const _ACL, callback: &mut T) -> Result<()> {
+fn enumerate_acl_entries<'e, T: EntryCallback<'e>>(pAcl: *const _ACL, callback: &mut T) -> Result<()> {
     if pAcl.is_null() {
         return Err(Error::empty());
     }
@@ -303,15 +293,15 @@ fn enumerate_acl_entries<T: EntryCallback>(pAcl: *const _ACL, callback: &mut T) 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct GetEntryCallback<'s> {
-    entries: Vec<ACLEntry>,
-    target_sid: &'s SID,
+struct GetEntryCallback<'r, 's> {
+    entries: Vec<ACLEntry<'r>>,
+    target_sid: SIDRef<'s>,
     target_type: Option<AceType>,
 }
 
-impl<'s> EntryCallback for GetEntryCallback<'s> {
-    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
-        if &entry.sid != self.target_sid {
+impl<'r, 's, 'e: 'r> EntryCallback<'e> for GetEntryCallback<'r, 's> {
+    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
+        if !entry.sid.eq_to_ref(self.target_sid) {
             return Ok(EntryCallbackResult::Continue);
         }
 
@@ -329,12 +319,12 @@ impl<'s> EntryCallback for GetEntryCallback<'s> {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct AllEntryCallback {
-    entries: Vec<ACLEntry>,
+struct AllEntryCallback<'r> {
+    entries: Vec<ACLEntry<'r>>,
 }
 
-impl EntryCallback for AllEntryCallback {
-    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
+impl<'r, 'e: 'r> EntryCallback<'e> for AllEntryCallback<'r> {
+    fn on_entry(&mut self, _hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
         self.entries.push(entry);
         Ok(EntryCallbackResult::Continue)
     }
@@ -344,7 +334,7 @@ impl EntryCallback for AllEntryCallback {
 
 struct AddEntryCallback<'s> {
     new_acl: Vec<u8>,
-    entry_sid: &'s SID,
+    entry_sid: SIDRef<'s>,
     entry_type: AceType,
     entry_flags: ACE_FLAGS,
     entry_mask: FILE_ACCESS_RIGHTS,
@@ -354,15 +344,11 @@ struct AddEntryCallback<'s> {
 impl<'s> AddEntryCallback<'s> {
     fn new(
         old_acl: *const _ACL,
-        sid: &'s SID,
+        sid: SIDRef<'s>,
         entry_type: AceType,
         flags: ACE_FLAGS,
         mask: FILE_ACCESS_RIGHTS,
     ) -> Result<Self> {
-        if sid.is_empty() {
-            return Err(Error::empty());
-        }
-
         let mut new_acl_size = acl_size(old_acl)?;
         new_acl_size += ACLEntry::calculate_entry_size(entry_type, sid)?;
 
@@ -387,7 +373,7 @@ impl<'s> AddEntryCallback<'s> {
     }
 
     fn insert_entry(&mut self) -> Result<()> {
-        let psid = self.entry_sid.psid().ok_or_else(|| Error::empty())?;
+        let psid = self.entry_sid.psid();
         let pacl = vec_as_pacl_mut(&mut self.new_acl);
 
         match self.entry_type {
@@ -434,18 +420,18 @@ impl<'s> AddEntryCallback<'s> {
     }
 }
 
-impl<'s> EntryCallback for AddEntryCallback<'s> {
-    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
+impl<'s, 'e: 's> EntryCallback<'e> for AddEntryCallback<'s> {
+    fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry<'e>) -> Result<EntryCallbackResult> {
         // NOTE(andy): Our assumption here is that the access control list are in the proper order
         //             See https://msdn.microsoft.com/en-us/library/windows/desktop/aa379298(v=vs.85).aspx
 
         if !self.already_added {
             if entry.flags.contains(INHERITED_ACE) {
-                if entry.sid.is_empty() {
+                if !entry.sid.is_valid() {
                     return Err(Error::empty());
                 }
 
-                if entry.entry_type == self.entry_type && &entry.sid == self.entry_sid {
+                if entry.entry_type == self.entry_type && entry.sid.eq_to_ref(self.entry_sid) {
                     // NOTE(andy): We found an entry that matches the type and sid of the one we were going
                     //             to add (uninherited). Instead of adding the old one and the new one, we
                     //             replace the old entry with the new entry.
@@ -496,7 +482,7 @@ impl<'s> EntryCallback for AddEntryCallback<'s> {
 struct RemoveEntryCallback<'s> {
     removed_count: usize,
     new_acl: Vec<u8>,
-    target_sid: &'s SID,
+    target_sid: SIDRef<'s>,
     target_type: Option<AceType>,
     target_flags: Option<ACE_FLAGS>,
 }
@@ -504,14 +490,10 @@ struct RemoveEntryCallback<'s> {
 impl<'s> RemoveEntryCallback<'s> {
     fn new(
         old_acl: *const _ACL,
-        target_sid: &'s SID,
+        target_sid: SIDRef<'s>,
         target_type: Option<AceType>,
         target_flags: Option<ACE_FLAGS>,
     ) -> Result<Self> {
-        if target_sid.is_empty() {
-            return Err(Error::empty());
-        }
-
         let new_acl_size = acl_size(old_acl)?;
 
         let mut obj = RemoveEntryCallback {
@@ -534,13 +516,13 @@ impl<'s> RemoveEntryCallback<'s> {
     }
 }
 
-impl<'s> EntryCallback for RemoveEntryCallback<'s> {
+impl<'s, 'e: 's> EntryCallback<'e> for RemoveEntryCallback<'s> {
     fn on_entry(&mut self, hdr: *mut ACE_HEADER, entry: ACLEntry) -> Result<EntryCallbackResult> {
-        if entry.sid.is_empty() {
+        if !entry.sid.is_valid() {
             return Err(Error::empty());
         }
 
-        if &entry.sid == self.target_sid {
+        if entry.sid.eq_to_ref(self.target_sid) {
             let mut target_reached = true;
 
             if let Some(ref t) = self.target_type {
@@ -761,29 +743,19 @@ impl ACL {
         self.object_type
     }
 
-    pub fn owner(&self) -> Result<Option<SID>> {
-        let psid = self.descriptor.owner();
-        let sid = match psid {
-            Some(psid) => Some(SID::from_psid(psid)?),
-            None => None,
-        };
-        Ok(sid)
+    pub fn owner<'s>(&'s self) -> Result<Option<SIDRef<'s>>> {
+        Ok(self.descriptor.owner().as_ref())
     }
 
-    pub fn group(&self) -> Result<Option<SID>> {
-        let psid = self.descriptor.group();
-        let sid = match psid {
-            Some(psid) => Some(SID::from_psid(psid)?),
-            None => None,
-        };
-        Ok(sid)
+    pub fn group<'s>(&'s self) -> Result<Option<SIDRef<'s>>> {
+        Ok(self.descriptor.group().as_ref())
     }
 
-    pub fn set_owner(&mut self, owner: SID) -> Result<()> {
+    pub fn set_owner<'s>(&mut self, owner: SIDRef<'s>) -> Result<()> {
         self.descriptor.set_owner(owner)
     }
 
-    pub fn set_group(&mut self, group: SID) -> Result<()> {
+    pub fn set_group<'s>(&mut self, group: SIDRef<'s>) -> Result<()> {
         self.descriptor.set_group(group)
     }
 
@@ -810,7 +782,7 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn get(&self, sid: &SID, entry_type: Option<AceType>) -> Result<Vec<ACLEntry>> {
+    pub fn get<'s>(&self, sid: SIDRef<'s>, entry_type: Option<AceType>) -> Result<Vec<ACLEntry>> {
         let mut callback = GetEntryCallback {
             target_sid: sid,
             target_type: entry_type,
@@ -852,9 +824,9 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn add_entry(
+    pub fn add_entry<'s>(
         &mut self,
-        sid: &SID,
+        sid: SIDRef<'s>,
         entry_type: AceType,
         flags: ACE_FLAGS,
         mask: FILE_ACCESS_RIGHTS,
@@ -909,9 +881,9 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code wrapped in a `Err` type.
-    pub fn remove_entry(
+    pub fn remove_entry<'s>(
         &mut self,
-        sid: &SID,
+        sid: SIDRef<'s>,
         entry_type: Option<AceType>,
         flags: Option<ACE_FLAGS>,
     ) -> Result<usize> {
@@ -954,7 +926,7 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn allow(&mut self, sid: &SID, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
+    pub fn allow<'s>(&mut self, sid: SIDRef<'s>, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
         if inheritable {
@@ -975,7 +947,7 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn deny(&mut self, sid: &SID, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
+    pub fn deny<'s>(&mut self, sid: SIDRef<'s>, inheritable: bool, mask: FILE_ACCESS_RIGHTS) -> Result<bool> {
         let mut flags: ACE_FLAGS = ACE_FLAGS(0);
 
         if inheritable {
@@ -998,9 +970,9 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn audit(
+    pub fn audit<'s>(
         &mut self,
-        sid: &SID,
+        sid: SIDRef<'s>,
         inheritable: bool,
         mask: FILE_ACCESS_RIGHTS,
         audit_success: bool,
@@ -1035,9 +1007,9 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.
-    pub fn integrity_level(
+    pub fn integrity_level<'s>(
         &mut self,
-        label_sid: &SID,
+        label_sid: SIDRef<'s>,
         inheritable: bool,
         policy: FILE_ACCESS_RIGHTS,
     ) -> Result<bool> {
@@ -1061,9 +1033,9 @@ impl ACL {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn remove(
+    pub fn remove<'s>(
         &mut self,
-        sid: &SID,
+        sid: SIDRef<'s>,
         entry_type: Option<AceType>,
         inheritable: Option<bool>,
     ) -> Result<usize> {
@@ -1077,10 +1049,10 @@ impl ACL {
         self.remove_entry(sid, entry_type, flags)
     }
 
-    pub fn set(&mut self, acl: &[ACLEntry], is_dacl: bool) -> Result<usize> {
+    pub fn set<'s>(&mut self, acl: &[ACLEntry<'s>], is_dacl: bool) -> Result<usize> {
         let mut new_acl_size = mem::size_of::<_ACL>() as u32;
         for ace in acl {
-            if ace.sid.is_empty() {
+            if !ace.sid.is_valid() {
                 return Err(Error::empty());
             }
 
