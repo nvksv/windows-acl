@@ -10,7 +10,7 @@ use core::{
     marker::PhantomData,
 };
 use std::{
-    os::windows::io::RawHandle
+    collections::btree_map::Entry, os::windows::io::RawHandle
 };
 use windows::{
     core::{
@@ -51,7 +51,7 @@ use windows::{
 use fallible_iterator::FallibleIterator;
 
 use crate::{
-    acl_entry::ACLEntry, 
+    acl_entry::{ACLEntry, ACLEntryMask},
     sd::{
         SDSource, SecurityDescriptor,
     }, 
@@ -108,19 +108,11 @@ impl<'r, K: ACLKind> RawACL<'r, K> {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, entry_type: Option<AceType>, inherited: Option<bool>) -> Result<Vec<ACLEntry<'r, K>>> {
+    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, mask: &ACLEntryMask ) -> Result<Vec<ACLEntry<'r, K>>> {
         let entries = self.iter_entry()
             .filter(|entry| {
-                if let Some(entry_type) = entry_type {
-                    if entry.entry_type != entry_type {
-                        return Ok(false);
-                    }
-                }
-
-                if let Some(inherited) = inherited {
-                    if entry.inherited_flag() != inherited {
-                        return Ok(false);
-                    }
+                if !entry.is_match(mask) {
+                    return Ok(false);
                 }
 
                 if !entry.sid.eq_to_ref(sid) {
@@ -134,23 +126,28 @@ impl<'r, K: ACLKind> RawACL<'r, K> {
         Ok(entries)
     }
 
-    pub fn add<'e: 'r>( &self, entry: ACLEntry<'e, K> ) -> impl FallibleIterator<Item = ACLEntry<'e, K>>
+    // pub fn add<'e: 'r>( &self, entry: ACLEntry<'e, K> ) -> impl FallibleIterator<Item = ACLEntry<'e, K>>
 
 } 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub struct RawVecACL {
+pub struct RawVecACL<K: ACLKind> {
     inner: Vec<u8>,
+    _ph: PhantomData<K>,
 }
 
-impl RawVecACL {
+impl<K: ACLKind> RawVecACL<K> {
     pub fn new() -> Self {
         Self {
             inner: vec![],
+            _ph: PhantomData,
         }
     }
 
+    pub fn from_iter<'r>(iter: impl FallibleIterator<Item = ACLEntry<'r, K>>) -> Result<Self> {
+        
+    }
 
 } 
 
@@ -340,12 +337,51 @@ where
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
 pub struct RawACLEntryAdder<'r, I, K>
 where
     I: FallibleIterator<Item = ACLEntry<'r, K>>,
     K: ACLKind + ?Sized,
 {
     inner: I,
-    items: [],
+    entry: ACLEntry<'r, K>,
+    processed: bool
+}
+
+impl<'r, I, K> RawACLEntryAdder<'r, I, K>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>>,
+    K: ACLKind + ?Sized,
+{
+    pub fn new( inner: I, entry: ACLEntry<'r, K> ) -> Self {
+        Self {
+            inner,
+            entry,
+            processed: false,
+        }
+    }
+}
+
+impl<'r, I, K> FallibleIterator for RawACLEntryAdder<'r, I, K>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>>,
+    K: ACLKind + ?Sized,
+{
+    type Item = ACLEntry<'r, K>;
+    type Error = Error;
+
+    fn next(&mut self) -> Result<Option<Self::Item>> {
+        while let Some(item) = self.inner.next()? {
+            match (self.f)(&item)? {
+                RawACLEntryReplaceResult::Ignore => { 
+                    return Ok(Some(item)); 
+                },
+                RawACLEntryReplaceResult::Remove => { 
+                    continue; 
+                },
+                RawACLEntryReplaceResult::Replace(item) => {
+                    return Ok(Some(item)); 
+                }
+            };
+        }
+    }
 }

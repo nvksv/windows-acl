@@ -68,7 +68,7 @@ use crate::{
     acl::{DACL, SACL},
     acl_entry::ACLEntry,
     sid::VSID,
-    types::{AceType, ACCESS_MASK},
+    types::{AceType, ACCESS_MASK}, ACLKind,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -443,3 +443,55 @@ pub fn parse_sacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, SACL>> {
 
     Ok(entry)
 }
+
+pub fn write_dacl_ace<'r, K: ACLKind>( entry: &ACLEntry<'r, K>, dst: &[u8] ) -> Result<()> {
+            match entry.entry_type {
+                AceType::AccessAllow => {
+                    unsafe {
+                        AddAccessAllowedAceEx(
+                            vec_as_pacl_mut(&mut new_acl),
+                            ACL_REVISION_DS,
+                            entry.flags,
+                            entry.access_mask.0,
+                            psid,
+                        )
+                    }?;
+                },
+                AceType::AccessDeny => {
+                    unsafe {
+                        AddAccessDeniedAceEx(
+                            vec_as_pacl_mut(&mut new_acl),
+                            ACL_REVISION_DS,
+                            ace.flags,
+                            ace.access_mask.0,
+                            psid,
+                        )
+                    }?;
+                },
+                AceType::SystemAudit => {
+                    unsafe {
+                        AddAuditAccessAceEx(
+                            vec_as_pacl_mut(&mut new_acl),
+                            ACL_REVISION_DS,
+                            ace.flags,
+                            ace.access_mask.0,
+                            psid,
+                            false,
+                            false,
+                        )
+                    }?;
+                },
+                AceType::SystemMandatoryLabel => {
+                    unsafe {
+                        AddMandatoryAce(
+                            vec_as_pacl_mut(&mut new_acl),
+                            ACL_REVISION_DS,
+                            ace.flags,
+                            ace.access_mask.0,
+                            psid,
+                        )
+                    }?;
+                },
+                _ => {
+                    return Err(Error::empty());
+                },
