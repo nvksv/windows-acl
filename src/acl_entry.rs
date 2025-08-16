@@ -16,9 +16,6 @@ use windows::{
             PSID, ACE_FLAGS, CONTAINER_INHERIT_ACE, FAILED_ACCESS_ACE_FLAG, INHERIT_ONLY_ACE, INHERITED_ACE, 
             NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE, SUCCESSFUL_ACCESS_ACE_FLAG,
         },
-        Storage::FileSystem::{
-            FILE_ACCESS_RIGHTS,
-        }
     },
 };
 
@@ -67,21 +64,57 @@ impl<'r, K> ACLEntry<'r, K> where K: ACLKind + ?Sized {
         }
     }
 
-    pub fn is_match( &self, mask: &ACLEntryMask ) -> bool {
+    #[inline]
+    pub fn new_allow<'s: 'r>( flags: ACE_FLAGS, access_mask: ACCESS_MASK, sid: VSID<'s> ) -> Self {
+        Self {
+            entry_type: AceType::AccessAllow,
+            flags,
+            access_mask,
+            sid,
+            _ph: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn new_deny<'s: 'r>( flags: ACE_FLAGS, access_mask: ACCESS_MASK, sid: VSID<'s> ) -> Self {
+        Self {
+            entry_type: AceType::AccessDeny,
+            flags,
+            access_mask,
+            sid,
+            _ph: PhantomData,
+        }
+    }
+
+    pub fn is_match_any_sid<'s>( &self, mask: &ACLEntryMask ) -> bool {
         if let Some(entry_type) = mask.entry_type {
             if self.entry_type != entry_type {
                 return false;
             }
         }
 
-        if mask.flags_mask != 0 {
+        if mask.flags_mask != ACE_FLAGS(0) {
             if self.flags & mask.flags_mask != mask.flags {
                 return false;
             }
         }
 
-        if mask.access_mask_mask != 0 {
+        if mask.access_mask_mask != ACCESS_MASK(0) {
             if self.access_mask & mask.access_mask != mask.access_mask_mask {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    pub fn is_match<'s>( &self, sid: SIDRef<'s>, mask: &Option<ACLEntryMask> ) -> bool {
+        if !self.sid.eq_to_ref(sid) {
+            return false;
+        }
+
+        if let Some(mask) = mask {
+            if !self.is_match_any_sid(mask) {
                 return false;
             }
         }
@@ -148,7 +181,7 @@ impl<'r, K> hash::Hash for ACLEntry<'r, K> where K: ACLKind + ?Sized {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ACLEntryMask {
     /// The entry's type
     pub entry_type: Option<AceType>,
@@ -177,31 +210,31 @@ impl ACLEntryMask {
 
     //
 
-    pub fn set_entry_type( &mut self, entry_type: AceType ) -> &mut Self {
+    pub fn set_entry_type( mut self, entry_type: AceType ) -> Self {
         self.entry_type = Some(entry_type);
         self
     }
 
-    pub fn unset_entry_type( &mut self ) -> &mut Self {
+    pub fn unset_entry_type( mut self ) -> Self {
         self.entry_type = None;
         self
     }
 
     //
 
-    pub fn set_flags( &mut self, flags: ACE_FLAGS ) -> &mut Self {
+    pub fn set_flags( mut self, flags: ACE_FLAGS ) -> Self {
         self.flags = flags;
         self.flags_mask = flags;
         self
     }
 
-    pub fn set_flags_with_mask( &mut self, flags: ACE_FLAGS, mask: ACE_FLAGS ) -> &mut Self {
+    pub fn set_flags_with_mask( mut self, flags: ACE_FLAGS, mask: ACE_FLAGS ) -> Self {
         self.flags = flags;
         self.flags_mask = mask;
         self
     }
 
-    pub fn unset_flags( &mut self ) -> &mut Self {
+    pub fn unset_flags( mut self ) -> Self {
         self.flags = ACE_FLAGS(0);
         self.flags_mask = ACE_FLAGS(0);
         self
@@ -209,19 +242,19 @@ impl ACLEntryMask {
 
     //
 
-    pub fn set_access_mask( &mut self, access_mask: ACCESS_MASK ) -> &mut Self {
+    pub fn set_access_mask( mut self, access_mask: ACCESS_MASK ) -> Self {
         self.access_mask = access_mask;
         self.access_mask_mask = access_mask;
         self
     }
 
-    pub fn set_access_mask_with_mask( &mut self, access_mask: ACCESS_MASK, mask: ACCESS_MASK ) -> &mut Self {
+    pub fn set_access_mask_with_mask( mut self, access_mask: ACCESS_MASK, mask: ACCESS_MASK ) -> Self {
         self.access_mask = access_mask;
         self.access_mask_mask = mask;
         self
     }
 
-    pub fn unset_access_mask( &mut self ) -> &mut Self {
+    pub fn unset_access_mask( mut self ) -> Self {
         self.access_mask = ACCESS_MASK(0);
         self.access_mask_mask = ACCESS_MASK(0);
         self
@@ -229,15 +262,17 @@ impl ACLEntryMask {
 
     //
 
-    pub fn set_inherited_flag( &mut self, bit: bool ) -> &mut Self {
+    pub fn set_inherited_flag( mut self, bit: bool ) -> Self {
         
-        self.access_mask &= !INHERITED_ACE;
+        self.flags &= !INHERITED_ACE;
         
         if bit {
-            self.access_mask |= INHERITED_ACE;
+            self.flags_mask |= INHERITED_ACE;
         }
 
-        self.access_mask_mask |= INHERITED_ACE;
+        self.flags_mask |= INHERITED_ACE;
+
+        self
     }
 
 

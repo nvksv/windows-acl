@@ -438,7 +438,9 @@ pub fn parse_sacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, SACL>> {
     Ok(entry)
 }
 
-pub fn write_dacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, DACL> ) -> Result<()> {
+pub fn write_dacl_ace<'r>( pacl: *mut _ACL, entry: &ACLEntry<'r, DACL> ) -> Result<()> {
+    let psid = entry.psid().ok_or_else(|| Error::empty())?;
+
     match entry.entry_type {
         AceType::AccessAllow => {
             unsafe {
@@ -447,7 +449,7 @@ pub fn write_dacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, DACL> ) -> Re
                     ACL_REVISION_DS,
                     entry.flags,
                     entry.access_mask.0,
-                    entry.psid(),
+                    psid,
                 )
             }?;
         },
@@ -458,7 +460,7 @@ pub fn write_dacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, DACL> ) -> Re
                     ACL_REVISION_DS,
                     entry.flags,
                     entry.access_mask.0,
-                    entry.psid(),
+                    psid,
                 )
             }?;
         },
@@ -470,7 +472,9 @@ pub fn write_dacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, DACL> ) -> Re
     Ok(())
 }
 
-pub fn write_sacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, SACL> ) -> Result<()> {
+pub fn write_sacl_ace<'r>( pacl: *mut _ACL, entry: &ACLEntry<'r, SACL> ) -> Result<()> {
+    let psid = entry.psid().ok_or_else(|| Error::empty())?;
+
     match entry.entry_type {
         AceType::SystemAudit => {
             unsafe {
@@ -479,7 +483,7 @@ pub fn write_sacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, SACL> ) -> Re
                     ACL_REVISION_DS,
                     entry.flags,
                     entry.access_mask.0,
-                    entry.psid(),
+                    psid,
                     false,
                     false,
                 )
@@ -492,21 +496,21 @@ pub fn write_sacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, SACL> ) -> Re
                     ACL_REVISION_DS,
                     entry.flags,
                     entry.access_mask.0,
-                    entry.psid(),
+                    psid,
                 )
             }?;
         },
-        AceType::SystemMandatoryLabel => {
-            unsafe {
-                AddResourceAttributeAce(
-                    pacl,
-                    ACL_REVISION_DS,
-                    entry.flags,
-                    entry.access_mask.0,
-                    entry.psid(),
-                )
-            }?;
-        },
+        // AceType::SystemMandatoryLabel => {
+        //     unsafe {
+        //         AddResourceAttributeAce(
+        //             pacl,
+        //             ACL_REVISION_DS,
+        //             entry.flags,
+        //             entry.access_mask.0,
+        //             psid,
+        //         )
+        //     }?;
+        // },
         _ => {
             return Err(Error::empty());
         },
