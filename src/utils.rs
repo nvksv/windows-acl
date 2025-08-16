@@ -12,25 +12,19 @@ use std::{
 };
 use windows::{
     core::{
-        Result, Error, PWSTR, HRESULT,
+        Error, Result, HRESULT, PWSTR
     },
     Win32::{
         Foundation::{
-            CloseHandle, INVALID_HANDLE_VALUE, HANDLE, ERROR_INSUFFICIENT_BUFFER,
-        },
-        System::{
+            CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, INVALID_HANDLE_VALUE
+        }, Security::{
+            AddResourceAttributeAce, AdjustTokenPrivileges, LookupPrivilegeValueW, ACL as _ACL, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY 
+        }, System::{
             Threading::{
                 GetCurrentProcess, OpenProcessToken,
             },
-            WindowsProgramming::{
-                GetUserNameW,
-            },
-        },
-        Security::{
-            AdjustTokenPrivileges, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED, 
-            TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_PRIVILEGES_ATTRIBUTES,
-            ACL as _ACL, 
-        },
+            WindowsProgramming::GetUserNameW,
+        }
     },
 };
 use windows::{
@@ -444,54 +438,79 @@ pub fn parse_sacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, SACL>> {
     Ok(entry)
 }
 
-pub fn write_dacl_ace<'r, K: ACLKind>( entry: &ACLEntry<'r, K>, dst: &[u8] ) -> Result<()> {
-            match entry.entry_type {
-                AceType::AccessAllow => {
-                    unsafe {
-                        AddAccessAllowedAceEx(
-                            vec_as_pacl_mut(&mut new_acl),
-                            ACL_REVISION_DS,
-                            entry.flags,
-                            entry.access_mask.0,
-                            psid,
-                        )
-                    }?;
-                },
-                AceType::AccessDeny => {
-                    unsafe {
-                        AddAccessDeniedAceEx(
-                            vec_as_pacl_mut(&mut new_acl),
-                            ACL_REVISION_DS,
-                            ace.flags,
-                            ace.access_mask.0,
-                            psid,
-                        )
-                    }?;
-                },
-                AceType::SystemAudit => {
-                    unsafe {
-                        AddAuditAccessAceEx(
-                            vec_as_pacl_mut(&mut new_acl),
-                            ACL_REVISION_DS,
-                            ace.flags,
-                            ace.access_mask.0,
-                            psid,
-                            false,
-                            false,
-                        )
-                    }?;
-                },
-                AceType::SystemMandatoryLabel => {
-                    unsafe {
-                        AddMandatoryAce(
-                            vec_as_pacl_mut(&mut new_acl),
-                            ACL_REVISION_DS,
-                            ace.flags,
-                            ace.access_mask.0,
-                            psid,
-                        )
-                    }?;
-                },
-                _ => {
-                    return Err(Error::empty());
-                },
+pub fn write_dacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, DACL> ) -> Result<()> {
+    match entry.entry_type {
+        AceType::AccessAllow => {
+            unsafe {
+                AddAccessAllowedAceEx(
+                    pacl,
+                    ACL_REVISION_DS,
+                    entry.flags,
+                    entry.access_mask.0,
+                    entry.psid(),
+                )
+            }?;
+        },
+        AceType::AccessDeny => {
+            unsafe {
+                AddAccessDeniedAceEx(
+                    pacl,
+                    ACL_REVISION_DS,
+                    entry.flags,
+                    entry.access_mask.0,
+                    entry.psid(),
+                )
+            }?;
+        },
+        _ => {
+            return Err(Error::empty());
+        },
+    }
+
+    Ok(())
+}
+
+pub fn write_sacl_ace<'r>( pacl: *const _ACL, entry: &ACLEntry<'r, SACL> ) -> Result<()> {
+    match entry.entry_type {
+        AceType::SystemAudit => {
+            unsafe {
+                AddAuditAccessAceEx(
+                    pacl,
+                    ACL_REVISION_DS,
+                    entry.flags,
+                    entry.access_mask.0,
+                    entry.psid(),
+                    false,
+                    false,
+                )
+            }?;
+        },
+        AceType::SystemMandatoryLabel => {
+            unsafe {
+                AddMandatoryAce(
+                    pacl,
+                    ACL_REVISION_DS,
+                    entry.flags,
+                    entry.access_mask.0,
+                    entry.psid(),
+                )
+            }?;
+        },
+        AceType::SystemMandatoryLabel => {
+            unsafe {
+                AddResourceAttributeAce(
+                    pacl,
+                    ACL_REVISION_DS,
+                    entry.flags,
+                    entry.access_mask.0,
+                    entry.psid(),
+                )
+            }?;
+        },
+        _ => {
+            return Err(Error::empty());
+        },
+    }
+
+    Ok(())
+}

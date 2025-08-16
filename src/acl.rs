@@ -59,7 +59,7 @@ use crate::{
         RawACL
     },
     types::*, 
-    utils::{as_ppvoid_mut, as_pvoid_mut, vec_as_pacl_mut, parse_dacl_ace, parse_sacl_ace, acl_size}
+    utils::{as_ppvoid_mut, as_pvoid_mut, vec_as_pacl_mut, parse_dacl_ace, parse_sacl_ace, write_dacl_ace, write_sacl_ace, acl_size}
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -93,6 +93,7 @@ pub struct SACL {}
 
 pub trait ACLKind: private::Sealed {
     fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>>;
+    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()>;
 }
 
 impl ACLKind for DACL {
@@ -100,12 +101,22 @@ impl ACLKind for DACL {
     fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> {
         parse_dacl_ace(hdr)
     }
+
+    #[inline(always)]
+    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()> {
+        write_dacl_ace( acl, entry )
+    }
 }
 
 impl ACLKind for SACL {
     #[inline(always)]
     fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> {
         parse_sacl_ace(hdr)
+    }
+
+    #[inline(always)]
+    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()> {
+        write_sacl_ace( acl, entry )
     }
 }
 

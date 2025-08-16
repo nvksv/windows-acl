@@ -1,13 +1,16 @@
 #![allow(non_snake_case)]
 
 use core::{ops, default};
-use windows::Win32::{
+use windows::{
+    core::Result,
+    Win32::{
         Security::Authorization::{
                 SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
                 SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
                 SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
             }, Storage::FileSystem::FILE_ACCESS_RIGHTS,
-    };
+    },
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -204,4 +207,10 @@ impl From<ACCESS_MASK> for FILE_ACCESS_RIGHTS {
     fn from(value: ACCESS_MASK) -> Self {
         Self(value.0)
     }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ 
+pub trait MaxCountPredictor {
+    fn max_count( &self ) -> Result<u16>;
 }

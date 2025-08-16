@@ -51,6 +51,7 @@ impl<'r> SIDRef<'r> {
         let sid_size = self.len();
 
         let mut sid: Vec<u8> = Vec::with_capacity(sid_size as usize);
+        unsafe { sid.set_len(sid_size as usize) };
 
         unsafe { 
             CopySid(
@@ -60,13 +61,9 @@ impl<'r> SIDRef<'r> {
             )
         }?;
 
-        unsafe { sid.set_len(sid_size as usize) };
-
-        let this = SID { 
+        Ok(SID { 
             sid
-        };
-
-        Ok(this)
+        })
     }
 
     pub fn to_vsid<'s: 'r>( &'s self ) -> VSID<'s> {

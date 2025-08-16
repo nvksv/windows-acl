@@ -8,6 +8,7 @@ use core::{
     ptr::{null, null_mut},
     mem,
     marker::PhantomData,
+    cmp::min,
 };
 use std::{
     collections::btree_map::Entry, os::windows::io::RawHandle
@@ -35,6 +36,7 @@ use windows::{
             SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE,
             SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE,
             SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, ACE_HEADER, ACE_FLAGS,
+            FindFirstFreeAce,
         },
         System::SystemServices::{
             ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, 
@@ -51,14 +53,11 @@ use windows::{
 use fallible_iterator::FallibleIterator;
 
 use crate::{
-    acl_entry::{ACLEntry, ACLEntryMask},
+    acl::ACLKind, acl_entry::{ACLEntry, ACLEntryMask, AVERAGE_ACE_SIZE, MAX_ACL_SIZE}, 
     sd::{
         SDSource, SecurityDescriptor,
     }, 
-    sid::{SIDRef, VSID}, 
-    acl::{ACLKind},
-    types::*, 
-    utils::{as_ppvoid_mut, as_pvoid_mut, vec_as_pacl_mut, parse_dacl_ace, parse_sacl_ace, acl_size}
+    sid::{SIDRef, VSID}, types::*, utils::{acl_size, as_ppvoid_mut, as_pvoid_mut, parse_dacl_ace, parse_sacl_ace, vec_as_pacl_mut}
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -145,8 +144,59 @@ impl<K: ACLKind> RawVecACL<K> {
         }
     }
 
-    pub fn from_iter<'r>(iter: impl FallibleIterator<Item = ACLEntry<'r, K>>) -> Result<Self> {
-        
+    pub fn from_iter<'r, I>(iter: &mut I) -> Result<Self> where I: FallibleIterator<Item = ACLEntry<'r, K>> + MaxCountPredictor {
+        let max_count = iter.max_count()?;
+        let max_size = min( 
+            max_count.saturating_mul(AVERAGE_ACE_SIZE).saturating_add(size_of::<_ACL>() as u16), 
+            MAX_ACL_SIZE 
+        );
+
+        let buffer = Vec::with_capacity( max_size );
+        unsafe { buffer.set_len(max_size as usize) };
+
+        //
+
+        let pacl = vec_as_pacl_mut(&mut buffer);
+        unsafe {
+            InitializeAcl(
+                pacl,
+                max_size as u32,
+                ACL_REVISION_DS,
+            )
+        }?;
+
+        while let Some(entry) = iter.next()? {
+            K::write_ace( pacl, entry )?;
+        }
+
+        //
+
+        let mut pfreeace: *mut c_void = null();
+        unsafe {
+            FindFirstFreeAce(
+                pacl,
+                &mut pfreeace
+            )?;
+        };
+
+        let buffer_range = &buffer[..].as_ptr_range();
+
+        let buffer_start = buffer_range.start as *const u8;
+        let acl_start = pacl as *const u8;
+        let acl_end = pfreeace as *const u8;
+        let buffer_end = buffer_range.end as *const u8;
+
+        if !(buffer_start == acl_start && acl_start <= acl_end && acl_end <= buffer_end) {
+            return Err(Error::empty());
+        }
+
+        let acl_size =  unsafe { acl_end.offset_from_unsigned(acl_start) };
+        unsafe { buffer.set_len(acl_size as usize) };
+
+        Ok(Self {
+            inner: buffer,
+            _ph: PhantomData,
+        })
     }
 
 } 
@@ -211,6 +261,13 @@ impl<'r> FallibleIterator for RawACLIterator<'r> {
     }
 } 
 
+impl<'r> MaxCountPredictor for RawACLIterator<'r> {
+    fn max_count( &self ) -> Result<u16> {
+        Ok(self.ace_count)
+    }
+}
+   
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub struct RawACLEntryHdrIterator<'r, K: ACLKind> {
@@ -243,6 +300,13 @@ impl<'r, K: ACLKind> FallibleIterator for RawACLEntryHdrIterator<'r, K> {
         )
     }
 }
+
+impl<'r, K: ACLKind> MaxCountPredictor for RawACLEntryHdrIterator<'r, K> {
+    fn max_count( &self ) -> Result<u16> {
+        self.inner.max_count()
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub struct RawACLEntryIterator<'r, K: ACLKind> {
@@ -275,6 +339,13 @@ impl<'r, K: ACLKind> FallibleIterator for RawACLEntryIterator<'r, K> {
         )
     }
 }
+
+impl<'r, K: ACLKind> MaxCountPredictor for RawACLEntryIterator<'r, K> {
+    fn max_count( &self ) -> Result<u16> {
+        self.inner.max_count()
+    }
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -334,6 +405,16 @@ where
     }
 }
 
+impl<'r, I, K, F> MaxCountPredictor for RawACLEntryReplacer<'r, I, K, F> 
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>> + MaxCountPredictor,
+    K: ACLKind + ?Sized,
+    F: FnMut(&<I as FallibleIterator>::Item) -> Result<RawACLEntryReplaceResult<'r, K>>,
+{
+    fn max_count( &self ) -> Result<u16> {
+        self.inner.max_count()
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -383,5 +464,15 @@ where
                 }
             };
         }
+    }
+}
+
+impl<'r, I, K> MaxCountPredictor for RawACLEntryAdder<'r, I, K>
+where
+    I: FallibleIterator<Item = ACLEntry<'r, K>> + MaxCountPredictor,
+    K: ACLKind + ?Sized,
+{
+    fn max_count( &self ) -> Result<u16> {
+        self.inner.max_count()
     }
 }

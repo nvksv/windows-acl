@@ -1,7 +1,6 @@
 //! `windows-acl` is a Rust library to simplify Windows ACL operations.
 #![cfg(windows)]
 
-// mod fallible_iterator;
 mod types;
 mod sid;
 mod sd;
