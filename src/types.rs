@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use core::{ops, default};
+use core::{ops, default, fmt};
 use windows::{
     core::Result,
     Win32::{
@@ -8,9 +8,19 @@ use windows::{
                 SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
                 SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
                 SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
-            }, Storage::FileSystem::FILE_ACCESS_RIGHTS,
+            }, 
+        Storage::FileSystem::{
+            FILE_ACCESS_RIGHTS, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_APPEND_DATA, DELETE, FILE_DELETE_CHILD,
+            FILE_EXECUTE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
+            FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_READ_EA, FILE_TRAVERSE, FILE_WRITE_ATTRIBUTES,
+            FILE_WRITE_DATA, FILE_WRITE_EA, READ_CONTROL, SPECIFIC_RIGHTS_ALL, STANDARD_RIGHTS_ALL,
+            STANDARD_RIGHTS_EXECUTE, STANDARD_RIGHTS_READ, STANDARD_RIGHTS_REQUIRED, STANDARD_RIGHTS_WRITE,
+            SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
+        },
     },
 };
+
+use crate::utils::DebugIdent;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -153,7 +163,7 @@ pub enum SidType {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ACCESS_MASK(pub u32);
 
@@ -209,3 +219,134 @@ impl From<ACCESS_MASK> for FILE_ACCESS_RIGHTS {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[repr(transparent)]
+pub struct DebugFileAccessRights( pub ACCESS_MASK );
+
+impl fmt::Debug for DebugFileAccessRights {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = f.debug_tuple("AceFlags");
+
+        // 0x_0001_0001
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_LIST_DIRECTORY) {
+            debug_assert!( FILE_LIST_DIRECTORY == FILE_READ_DATA );
+            f.field(&DebugIdent("FILE_LIST_DIRECTORY/FILE_READ_DATA"));
+        }
+
+        // 0x_0000_0002
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_ADD_FILE) {
+            debug_assert!( FILE_ADD_FILE == FILE_WRITE_DATA );
+            f.field(&DebugIdent("FILE_ADD_FILE/FILE_WRITE_DATA"));
+        }
+
+        // 0x_0000_0004
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_ADD_SUBDIRECTORY) {
+            debug_assert!( FILE_ADD_SUBDIRECTORY == FILE_APPEND_DATA );
+            f.field(&DebugIdent("FILE_ADD_SUBDIRECTORY/FILE_APPEND_DATA"));
+        }
+
+        // 0x_0000_0008
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_READ_EA) {
+            f.field(&DebugIdent("FILE_READ_EA"));
+        }
+
+        // 0x_0000_0010
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_WRITE_EA) {
+            f.field(&DebugIdent("FILE_WRITE_EA"));
+        }
+
+        // 0x_0000_0020
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_EXECUTE) {
+            debug_assert!( FILE_EXECUTE == FILE_TRAVERSE );
+            f.field(&DebugIdent("FILE_EXECUTE/FILE_TRAVERSE"));
+        }
+
+        // 0x_0000_0040
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_DELETE_CHILD) {
+            f.field(&DebugIdent("FILE_DELETE_CHILD"));
+        }
+
+        // 0x_0000_0100
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_WRITE_ATTRIBUTES) {
+            f.field(&DebugIdent("FILE_WRITE_ATTRIBUTES"));
+        }
+
+        // 0x_0000_0080
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_READ_ATTRIBUTES) {
+            f.field(&DebugIdent("FILE_READ_ATTRIBUTES"));
+        }
+
+        // 0x_0001_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(DELETE) {
+            f.field(&DebugIdent("DELETE"));
+        }
+
+        // 0x_0002_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(READ_CONTROL) {
+            f.field(&DebugIdent("READ_CONTROL"));
+        }
+
+        // 0x_0004_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(WRITE_DAC) {
+            f.field(&DebugIdent("WRITE_DAC"));
+        }
+
+        // 0x_0008_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(WRITE_OWNER) {
+            f.field(&DebugIdent("WRITE_OWNER"));
+        }
+
+        // 0x_0010_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(SYNCHRONIZE) {
+            f.field(&DebugIdent("SYNCHRONIZE"));
+        }
+
+        // 0x_0012_00A0
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_GENERIC_EXECUTE) {
+            f.field(&DebugIdent("FILE_GENERIC_EXECUTE"));
+        }
+
+        // 0x_0012_0089
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_GENERIC_READ) {
+            f.field(&DebugIdent("FILE_GENERIC_READ"));
+        }
+
+        // 0x_0012_0116
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_GENERIC_WRITE) {
+            f.field(&DebugIdent("FILE_GENERIC_WRITE"));
+        }
+
+        // 0x_0000_FFFF
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(SPECIFIC_RIGHTS_ALL) {
+            f.field(&DebugIdent("SPECIFIC_RIGHTS_ALL"));
+        }
+
+        // 0x_0000_FFFF
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_ALL) {
+            f.field(&DebugIdent("STANDARD_RIGHTS_ALL"));
+        }
+
+        // 0x_0002_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_EXECUTE) {
+            f.field(&DebugIdent("STANDARD_RIGHTS_EXECUTE"));
+        }
+
+        // 0x_0002_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_READ) {
+            f.field(&DebugIdent("STANDARD_RIGHTS_READ"));
+        }
+
+        // 0x_0002_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_REQUIRED) {
+            f.field(&DebugIdent("STANDARD_RIGHTS_REQUIRED"));
+        }
+
+        // 0x_0002_0000
+        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_WRITE) {
+            f.field(&DebugIdent("STANDARD_RIGHTS_WRITE"));
+        }
+
+        f.finish()
+    }
+}

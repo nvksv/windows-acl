@@ -91,9 +91,10 @@ pub struct DACL {}
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SACL {}
 
+#[allow(private_bounds)]
 pub trait ACLKind: fmt::Debug + PartialEq + Eq + PartialOrd + Ord + hash::Hash + private::Sealed {
-    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>>;
-    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()>;
+    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> where Self: Sized;
+    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()> where Self: Sized;
 }
 
 impl ACLKind for DACL {

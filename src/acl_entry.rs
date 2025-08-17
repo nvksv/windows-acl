@@ -6,7 +6,9 @@ use core::{
     mem,
     hash,
     marker::PhantomData,
+    fmt,
 };
+use std::fmt::Write;
 use windows::{
     core::{
         Error, Result,
@@ -20,7 +22,7 @@ use windows::{
 };
 
 use crate::{
-    utils::acl_entry_size,
+    utils::{acl_entry_size, DebugIdent},
     types::*,
     sid::{SID, SIDRef, VSID},
     acl::{ACLKind, DACL, SACL},
@@ -34,8 +36,8 @@ pub const MAX_ACL_SIZE: u16 = 65535;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// `ACLEntry` represents a single access control entry in an access control list
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ACLEntry<'r, K> where K: ACLKind + ?Sized {
+#[derive(Clone, PartialEq, Eq)]
+pub struct ACLEntry<'r, K: ACLKind> {
     /// The entry's type
     pub entry_type: AceType,
 
@@ -51,7 +53,18 @@ pub struct ACLEntry<'r, K> where K: ACLKind + ?Sized {
     pub _ph: PhantomData<K>,
 }
 
-impl<'r, K> ACLEntry<'r, K> where K: ACLKind + ?Sized {
+impl<'r, K: ACLKind> fmt::Debug for ACLEntry<'r, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ACLEntry")
+            .field( "entry_type", &self.entry_type )
+            .field( "flags", &DebugAceFlags(self.flags) )
+            .field( "access_mask", &DebugFileAccessRights(self.access_mask) )
+            .field( "sid", &self.sid )
+            .finish()
+    }
+}
+
+impl<'r, K: ACLKind> ACLEntry<'r, K> {
     /// Returns an `ACLEntry` object with default values.
     #[inline]
     pub fn new() -> Self {
@@ -170,7 +183,7 @@ impl<'r, K> ACLEntry<'r, K> where K: ACLKind + ?Sized {
     }
 }
 
-impl<'r, K> hash::Hash for ACLEntry<'r, K> where K: ACLKind + ?Sized {
+impl<'r, K: ACLKind> hash::Hash for ACLEntry<'r, K> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         hash::Hash::hash(&self.entry_type, state);
         hash::Hash::hash(&self.flags.0, state);
@@ -181,8 +194,10 @@ impl<'r, K> hash::Hash for ACLEntry<'r, K> where K: ACLKind + ?Sized {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ACLEntryMask {
+    pub never: bool, 
+
     /// The entry's type
     pub entry_type: Option<AceType>,
 
@@ -200,12 +215,37 @@ impl ACLEntryMask {
     #[inline]
     pub fn new() -> Self {
         Self {
+            never: false,
             entry_type: None,
             flags: ACE_FLAGS(0),
             flags_mask: ACE_FLAGS(0),
             access_mask: ACCESS_MASK(0),
             access_mask_mask: ACCESS_MASK(0),
         }
+    }
+
+    #[inline]
+    pub fn never() -> Self {
+        Self {
+            never: true,
+            entry_type: None,
+            flags: ACE_FLAGS(0),
+            flags_mask: ACE_FLAGS(0),
+            access_mask: ACCESS_MASK(0),
+            access_mask_mask: ACCESS_MASK(0),
+        }
+    }
+
+    //
+
+    pub fn set_never( mut self ) -> Self {
+        self.never = true;
+        self
+    }
+
+    pub fn unset_never( mut self ) -> Self {
+        self.never = false;
+        self
     }
 
     //
@@ -277,3 +317,53 @@ impl ACLEntryMask {
 
 
 }
+
+impl fmt::Debug for ACLEntryMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ACLEntryMask")
+            .field( "never", &self.never )
+            .field( "entry_type", &self.entry_type )
+            .field( "flags", &DebugAceFlags(self.flags) )
+            .field( "flags_mask", &DebugAceFlags(self.flags_mask) )
+            .field( "access_mask", &DebugFileAccessRights(self.access_mask) )
+            .field( "access_mask_mask", &DebugFileAccessRights(self.access_mask_mask) )
+            .finish()
+    }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct DebugAceFlags( ACE_FLAGS );
+
+impl fmt::Debug for DebugAceFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = f.debug_tuple("AceFlags");
+
+        if self.0.contains(OBJECT_INHERIT_ACE) {
+            f.field(&DebugIdent("OBJECT_INHERIT_ACE"));
+        }
+        if self.0.contains(CONTAINER_INHERIT_ACE) {
+            f.field(&DebugIdent("CONTAINER_INHERIT_ACE"));
+        }
+        if self.0.contains(NO_PROPAGATE_INHERIT_ACE) {
+            f.field(&DebugIdent("NO_PROPAGATE_INHERIT_ACE"));
+        }
+        if self.0.contains(INHERIT_ONLY_ACE) {
+            f.field(&DebugIdent("INHERIT_ONLY_ACE"));
+        }
+        if self.0.contains(INHERITED_ACE) {
+            f.field(&DebugIdent("INHERITED_ACE"));
+        }
+        if self.0.contains(SUCCESSFUL_ACCESS_ACE_FLAG) {
+            f.field(&DebugIdent("SUCCESSFUL_ACCESS_ACE_FLAG"));
+        }
+        if self.0.contains(FAILED_ACCESS_ACE_FLAG) {
+            f.field(&DebugIdent("FAILED_ACCESS_ACE_FLAG"));
+        }
+
+        f.finish()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -139,89 +139,7 @@ pub fn current_user_account_name() -> Result<String> {
     unsafe { username.to_string() }.map_err(|_| Error::empty())
 }
 
-fn set_privilege(name: &str, is_enabled: bool) -> Result<bool> {
-    let mut tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
-    
-    let mut wPrivilegeName: Vec<u16> = str_to_wstr(name);
-    let wPrivilegeName = PWSTR(wPrivilegeName.as_mut_ptr() as *mut u16);
-
-    unsafe {
-        LookupPrivilegeValueW(
-            PWSTR::null(),
-            wPrivilegeName,
-            &mut tkp.Privileges[0].Luid,
-        )
-    }?;
-
-    tkp.PrivilegeCount = 1;
-
-    if is_enabled {
-        tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    } else {
-        tkp.Privileges[0].Attributes = TOKEN_PRIVILEGES_ATTRIBUTES(0);
-    }
-
-    let mut hToken: HANDLE = INVALID_HANDLE_VALUE;
-    unsafe {
-        OpenProcessToken(
-            GetCurrentProcess(),
-            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-            &mut hToken,
-        )
-    }?;
-
-    match unsafe {
-        AdjustTokenPrivileges(
-            hToken,
-            false,
-            Some(&mut tkp),
-            0,
-            None,
-            None,
-        )
-    } {
-        Ok(()) => {
-            unsafe { CloseHandle(hToken) }?;
-        },
-        Err(e) => {
-            let _ = unsafe { CloseHandle(hToken) };
-            return Err(e);
-        }
-    };
-
-    Ok(is_enabled)
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#[derive(Debug)]
-pub struct SystemPrivilege {
-    name: Option<String>,
-}
-
-impl SystemPrivilege {
-    pub fn acquire(name: &str) -> Result<SystemPrivilege> {
-        set_privilege(name, true).map(|_| SystemPrivilege {
-            name: Some(name.to_owned()),
-        })
-    }
-
-    pub fn release(&mut self) -> bool {
-        let mut status = true;
-        if let Some(ref name) = self.name {
-            status = set_privilege(name, false).is_ok();
-        }
-
-        self.name = None;
-        status
-    }
-}
-
-impl Drop for SystemPrivilege {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -518,3 +436,16 @@ pub fn write_sacl_ace<'r>( pacl: *mut _ACL, entry: &ACLEntry<'r, SACL> ) -> Resu
 
     Ok(())
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct DebugIdent( pub &'static str );
+
+impl fmt::Debug for DebugIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str( &self.0 )
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+

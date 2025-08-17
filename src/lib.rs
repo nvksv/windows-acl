@@ -3,6 +3,7 @@
 
 mod types;
 mod sid;
+mod privilege;
 mod sd;
 mod acl_entry;
 mod acl_list;

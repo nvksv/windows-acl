@@ -28,7 +28,8 @@ use windows::{
 };
 
 use crate::{
-    utils::{SystemPrivilege, str_to_wstr, vec_as_pacl, MaybePtr},
+    utils::{str_to_wstr, vec_as_pacl, MaybePtr},
+    privilege::SystemPrivilege,
     sid::{SID, SIDRef, VSID},
 };
 
@@ -93,13 +94,35 @@ impl SecurityDescriptor {
         source: &SDSource,
         obj_type: SE_OBJECT_TYPE,
     ) -> Result<()> {
+        let mut privilege = if self.include_sacl {
+            let mut privilege = SystemPrivilege::by_name("SeSecurityPrivilege")?;
+            privilege.acquire()?;
+
+            Some(privilege)
+        } else {
+            None
+        };
+
+        let result = self.read_with_privilege( source, obj_type );
+
+        if let Some(privilege) = privilege.as_mut() {
+            privilege.release()?;
+        }
+
+        result
+    }
+
+    fn read_with_privilege(
+        &mut self,
+        source: &SDSource,
+        obj_type: SE_OBJECT_TYPE,
+    ) -> Result<()> {
         let mut flags =
             DACL_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION;
 
         if self.include_sacl {
-            let _ = SystemPrivilege::acquire("SeSecurityPrivilege")?;
             flags |= SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
-        }
+        };
 
         let mut pDacl: *mut _ACL = null_mut();
         let mut pSacl: *mut _ACL = null_mut();
@@ -183,7 +206,7 @@ impl SecurityDescriptor {
         }
 
         if let MaybePtr::Value(sacl_value) = &self.sacl {
-            let _ = SystemPrivilege::acquire("SeSecurityPrivilege")?;
+            SystemPrivilege::by_name("SeSecurityPrivilege")?.acquire()?;
             flags |= SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
             sacl = Some(vec_as_pacl(sacl_value));
         }
