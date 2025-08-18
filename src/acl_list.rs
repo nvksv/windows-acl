@@ -3,16 +3,10 @@
 #![allow(non_snake_case)]
 
 use core::{
-    mem::offset_of,
     ffi::c_void,
-    ptr::{null, null_mut},
-    mem,
+    ptr::{null_mut},
     marker::PhantomData,
     cmp::min,
-    iter::FromIterator,
-};
-use std::{
-    collections::btree_map::Entry, os::windows::io::RawHandle
 };
 use windows::{
     core::{
@@ -20,45 +14,22 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            HANDLE, STATUS_ALLOTTED_SPACE_EXCEEDED, 
+            STATUS_ALLOTTED_SPACE_EXCEEDED, 
         },
         Security::{
-            Authorization::{
-                SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
-                SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
-            },
-            AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce,
-            GetAce, GetAclInformation, InitializeAcl, IsValidAcl,
-            AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
-            ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE,
-            ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE,
-            ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
-            FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, 
-            SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE,
-            SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE,
-            SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, ACE_HEADER, ACE_FLAGS,
+            GetAce, InitializeAcl, IsValidAcl,
+            ACL as _ACL, ACL_REVISION_DS, ACE_HEADER, ACE_FLAGS,
             FindFirstFreeAce,
         },
-        System::SystemServices::{
-            ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, 
-            ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, 
-            ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, MAXDWORD, 
-            SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, 
-            SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
-        },
-        Storage::FileSystem::{
-            // FILE_ACCESS_RIGHTS,
-        }
     },
 };
 use fallible_iterator::FallibleIterator;
 
 use crate::{
-    acl::ACLKind, acl_entry::{ACLEntry, ACLEntryMask, AVERAGE_ACE_SIZE, MAX_ACL_SIZE}, 
-    sd::{
-        SDSource, SecurityDescriptor,
-    }, 
-    sid::{SIDRef, VSID}, types::*, utils::{acl_size, as_ppvoid_mut, as_pvoid_mut, parse_dacl_ace, parse_sacl_ace, vec_as_pacl_mut, MaybePtr}
+    acl_kind::{ACLKind, IsACLKind, DACL, SACL},
+    acl_entry::{ACLEntry, ACLEntryMask, AVERAGE_ACE_SIZE, MAX_ACL_SIZE}, 
+    sid::{SIDRef, VSID}, types::*, 
+    utils::{as_ppvoid_mut, vec_as_pacl_mut}
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -101,17 +72,33 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACLEntry<'r,
     }
 
     #[inline]
-    fn add_allow<'s: 'r>( self, sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK, filter: Option<ACLEntryMask> ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn add_allow<'s: 'r>( self, sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK, filter: Option<ACLEntryMask> ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
         self.add(
-            ACLEntry::new_allow(flags, access_mask, sid), 
+            ACLEntry::new_allow( sid, flags, access_mask ), 
             filter
         )
     }
 
     #[inline]
-    fn add_deny<'s: 'r>( self, sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK, filter: Option<ACLEntryMask> ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn add_deny<'s: 'r>( self, sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK, filter: Option<ACLEntryMask> ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
         self.add(
-            ACLEntry::new_deny(flags, access_mask, sid), 
+            ACLEntry::new_deny( sid, flags, access_mask ), 
+            filter
+        )
+    }
+
+    #[inline]
+    fn add_audit<'s: 'r>( self, sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK, filter: Option<ACLEntryMask> ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
+        self.add(
+            ACLEntry::new_audit( sid, flags, access_mask ), 
+            filter
+        )
+    }
+
+    #[inline]
+    fn add_mandatory_label<'s: 'r>( self, label_sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK, filter: Option<ACLEntryMask> ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
+        self.add(
+            ACLEntry::new_mandatory_label( label_sid, flags, access_mask ), 
             filter
         )
     }
@@ -183,11 +170,13 @@ impl<'r, K: ACLKind> ACLList<'r, K> {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, mask: &ACLEntryMask ) -> Result<Vec<ACLEntry<'r, K>>> {
+    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, mask: Option<ACLEntryMask> ) -> Result<Vec<ACLEntry<'r, K>>> {
         self.iter()
             .filter(|entry| {
-                if !entry.is_match_any_sid(mask) {
-                    return Ok(false);
+                if let Some(mask) = mask.as_ref() {
+                    if !entry.is_match_any_sid(mask) {
+                        return Ok(false);
+                    }
                 }
 
                 if !entry.sid.eq_to_ref(sid) {

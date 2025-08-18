@@ -5,12 +5,14 @@ mod types;
 mod sid;
 mod privilege;
 mod sd;
+mod acl_kind;
 mod acl_entry;
 mod acl_list;
 mod acl;
 mod utils;
 
-pub use acl::{ACL, ACLKind, DACL, SACL};
+pub use acl_kind::{ACLKind, DACL, SACL};
+pub use acl::{ACL};
 pub use acl_entry::{ACLEntry, ACLEntryMask};
 pub use acl_list::{ACLList, ACLEntryIterator, ACLVecList};
 pub use sid::{SID, SIDRef, VSID};

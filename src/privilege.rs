@@ -139,7 +139,7 @@ impl SystemPrivilege {
 
 impl Drop for SystemPrivilege {
     fn drop(&mut self) {
-        self.release();
+        let _ = self.release();
     }
 }
 

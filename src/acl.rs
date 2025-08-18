@@ -52,6 +52,7 @@ use windows::{
 };
 use fallible_iterator::FallibleIterator;
 use crate::{
+    acl_kind::{DACL, SACL},
     acl_entry::ACLEntry, acl_list::{
         ACLList, ACLListEntryIterator, ACLVecList
     }, sd::{
@@ -84,51 +85,6 @@ pub struct ACL {
 // }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DACL {}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SACL {}
-
-#[allow(private_bounds)]
-pub trait ACLKind: fmt::Debug + PartialEq + Eq + PartialOrd + Ord + hash::Hash + private::Sealed {
-    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> where Self: Sized;
-    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()> where Self: Sized;
-}
-
-impl ACLKind for DACL {
-    #[inline(always)]
-    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> {
-        parse_dacl_ace(hdr)
-    }
-
-    #[inline(always)]
-    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()> {
-        write_dacl_ace( acl, entry )
-    }
-}
-
-impl ACLKind for SACL {
-    #[inline(always)]
-    fn parse_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, Self>> {
-        parse_sacl_ace(hdr)
-    }
-
-    #[inline(always)]
-    fn write_ace<'r>( acl: *mut _ACL, entry: &ACLEntry<'r, Self> ) -> Result<()> {
-        write_sacl_ace( acl, entry )
-    }
-}
-
-impl private::Sealed for DACL {}
-impl private::Sealed for SACL {}
-
-mod private {
-    pub(crate) trait Sealed {}
-
-}
-
 
 
 // fn enumerate_acl_entries<'e, T: EntryCallback<'e>>(pAcl: *const _ACL, callback: &mut T) -> Result<()> {
@@ -632,7 +588,7 @@ impl ACL {
 
     //
 
-    pub fn dacl<'s>( &'s self ) -> ACLList<'s, DACL> {
+    pub fn dacl( &self ) -> ACLList<'_, DACL> {
         let dacl = self.descriptor.dacl().unwrap_or(null());
         ACLList::from_pacl(dacl)
     }
@@ -662,7 +618,7 @@ impl ACL {
 
     //
 
-    pub fn sacl( &self ) -> ACLList<SACL> {
+    pub fn sacl( &self ) -> ACLList<'_, SACL> {
         let sacl = self.descriptor.sacl().unwrap_or(null());
         ACLList::from_pacl(sacl)
     }

@@ -59,7 +59,7 @@ use windows::{
 };
 
 use crate::{
-    acl::{DACL, SACL},
+    acl_kind::{DACL, SACL},
     acl_entry::ACLEntry,
     sid::VSID,
     types::{AceType, ACCESS_MASK}, ACLKind,

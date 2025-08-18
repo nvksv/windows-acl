@@ -8,7 +8,6 @@ use core::{
     marker::PhantomData,
     fmt,
 };
-use std::fmt::Write;
 use windows::{
     core::{
         Error, Result,
@@ -24,8 +23,8 @@ use windows::{
 use crate::{
     utils::{acl_entry_size, DebugIdent},
     types::*,
-    sid::{SID, SIDRef, VSID},
-    acl::{ACLKind, DACL, SACL},
+    sid::{SIDRef, VSID},
+    acl_kind::{ACLKind, DACL, SACL, IsACLKind},
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -41,14 +40,14 @@ pub struct ACLEntry<'r, K: ACLKind> {
     /// The entry's type
     pub entry_type: AceType,
 
+    /// The target entity's raw SID
+    pub sid: VSID<'r>,
+
     /// See `AceFlags` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
     pub flags: ACE_FLAGS,
 
     /// See [ACCESS_MASK](https://docs.microsoft.com/en-us/windows/desktop/secauthz/access-mask)
     pub access_mask: ACCESS_MASK,
-
-    /// The target entity's raw SID
-    pub sid: VSID<'r>,
 
     pub _ph: PhantomData<K>,
 }
@@ -76,30 +75,61 @@ impl<'r, K: ACLKind> ACLEntry<'r, K> {
             _ph: PhantomData,
         }
     }
+}
 
+impl<'r, K: IsACLKind<DACL>> ACLEntry<'r, K> {
     #[inline]
-    pub fn new_allow<'s: 'r>( flags: ACE_FLAGS, access_mask: ACCESS_MASK, sid: VSID<'s> ) -> Self {
+    pub fn new_allow<'s: 'r>( sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
         Self {
             entry_type: AceType::AccessAllow,
+            sid,
             flags,
             access_mask,
-            sid,
             _ph: PhantomData,
         }
     }
 
     #[inline]
-    pub fn new_deny<'s: 'r>( flags: ACE_FLAGS, access_mask: ACCESS_MASK, sid: VSID<'s> ) -> Self {
+    pub fn new_deny<'s: 'r>( sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
         Self {
-            entry_type: AceType::AccessDeny,
+            entry_type: AceType::SystemAudit,
+            sid,
             flags,
             access_mask,
+            _ph: PhantomData,
+        }
+    }
+}
+
+impl<'r, K: IsACLKind<SACL>> ACLEntry<'r, K> {
+    #[inline]
+    pub fn new_audit<'s: 'r>( sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
+        Self {
+            entry_type: AceType::SystemAudit,
             sid,
+            flags,
+            access_mask,
             _ph: PhantomData,
         }
     }
 
+    #[inline]
+    pub fn new_mandatory_label<'s: 'r>( label_sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
+        Self {
+            entry_type: AceType::SystemMandatoryLabel,
+            sid: label_sid,
+            flags,
+            access_mask,
+            _ph: PhantomData,
+        }
+    }
+}
+
+impl<'r, K: ACLKind> ACLEntry<'r, K> {
     pub fn is_match_any_sid<'s>( &self, mask: &ACLEntryMask ) -> bool {
+        if mask.never {
+            return false;
+        }
         if let Some(entry_type) = mask.entry_type {
             if self.entry_type != entry_type {
                 return false;
