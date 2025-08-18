@@ -23,7 +23,7 @@ use windows::{
 use crate::{
     utils::{acl_entry_size, DebugIdent},
     types::*,
-    sid::{SIDRef, VSID},
+    sid::{SIDRef, VSID, IntoVSID},
     acl_kind::{ACLKind, DACL, SACL, IsACLKind},
 };
 
@@ -36,7 +36,7 @@ pub const MAX_ACL_SIZE: u16 = 65535;
 
 /// `ACLEntry` represents a single access control entry in an access control list
 #[derive(Clone, PartialEq, Eq)]
-pub struct ACLEntry<'r, K: ACLKind> {
+pub struct ACE<'r, K: ACLKind> {
     /// The entry's type
     pub entry_type: AceType,
 
@@ -52,7 +52,7 @@ pub struct ACLEntry<'r, K: ACLKind> {
     pub _ph: PhantomData<K>,
 }
 
-impl<'r, K: ACLKind> fmt::Debug for ACLEntry<'r, K> {
+impl<'r, K: ACLKind> fmt::Debug for ACE<'r, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ACLEntry")
             .field( "entry_type", &self.entry_type )
@@ -63,70 +63,70 @@ impl<'r, K: ACLKind> fmt::Debug for ACLEntry<'r, K> {
     }
 }
 
-impl<'r, K: ACLKind> ACLEntry<'r, K> {
-    /// Returns an `ACLEntry` object with default values.
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            entry_type: AceType::Unknown,
-            flags: ACE_FLAGS(0),
-            access_mask: ACCESS_MASK::default(),
-            sid: VSID::empty(),
-            _ph: PhantomData,
-        }
-    }
-}
+// impl<'r, K: ACLKind> ACE<'r, K> {
+//     /// Returns an `ACLEntry` object with default values.
+//     #[inline]
+//     pub fn new() -> Self {
+//         Self {
+//             entry_type: AceType::Unknown,
+//             flags: ACE_FLAGS(0),
+//             access_mask: ACCESS_MASK::default(),
+//             sid: VSID::empty(),
+//             _ph: PhantomData,
+//         }
+//     }
+// }
 
-impl<'r, K: IsACLKind<DACL>> ACLEntry<'r, K> {
+impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     #[inline]
-    pub fn new_allow<'s: 'r>( sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
+    pub fn new_allow<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::AccessAllow,
-            sid,
-            flags,
-            access_mask,
+            sid: sid.into_vsid(),
+            flags: flags.into_ace_flags(),
+            access_mask: access_mask.into_access_mask(),
             _ph: PhantomData,
         }
     }
 
     #[inline]
-    pub fn new_deny<'s: 'r>( sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
+    pub fn new_deny<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::SystemAudit,
-            sid,
-            flags,
-            access_mask,
+            sid: sid.into_vsid(),
+            flags: flags.into_ace_flags(),
+            access_mask: access_mask.into_access_mask(),
             _ph: PhantomData,
         }
     }
 }
 
-impl<'r, K: IsACLKind<SACL>> ACLEntry<'r, K> {
+impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
     #[inline]
-    pub fn new_audit<'s: 'r>( sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
+    pub fn new_audit<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::SystemAudit,
-            sid,
-            flags,
-            access_mask,
+            sid: sid.into_vsid(),
+            flags: flags.into_ace_flags(),
+            access_mask: access_mask.into_access_mask(),
             _ph: PhantomData,
         }
     }
 
     #[inline]
-    pub fn new_mandatory_label<'s: 'r>( label_sid: VSID<'s>, flags: ACE_FLAGS, access_mask: ACCESS_MASK ) -> Self {
+    pub fn new_mandatory_label<'s: 'r>( label_sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::SystemMandatoryLabel,
-            sid: label_sid,
-            flags,
-            access_mask,
+            sid: label_sid.into_vsid(),
+            flags: flags.into_ace_flags(),
+            access_mask: access_mask.into_access_mask(),
             _ph: PhantomData,
         }
     }
 }
 
-impl<'r, K: ACLKind> ACLEntry<'r, K> {
-    pub fn is_match_any_sid<'s>( &self, mask: &ACLEntryMask ) -> bool {
+impl<'r, K: ACLKind> ACE<'r, K> {
+    pub fn is_match_any_sid<'s>( &self, mask: &ACEMask ) -> bool {
         if mask.never {
             return false;
         }
@@ -151,7 +151,7 @@ impl<'r, K: ACLKind> ACLEntry<'r, K> {
         true
     }
 
-    pub fn is_match<'s>( &self, sid: SIDRef<'s>, mask: &Option<ACLEntryMask> ) -> bool {
+    pub fn is_match<'s>( &self, sid: SIDRef<'s>, mask: &Option<ACEMask> ) -> bool {
         if !self.sid.eq_to_ref(sid) {
             return false;
         }
@@ -213,7 +213,7 @@ impl<'r, K: ACLKind> ACLEntry<'r, K> {
     }
 }
 
-impl<'r, K: ACLKind> hash::Hash for ACLEntry<'r, K> {
+impl<'r, K: ACLKind> hash::Hash for ACE<'r, K> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         hash::Hash::hash(&self.entry_type, state);
         hash::Hash::hash(&self.flags.0, state);
@@ -225,22 +225,20 @@ impl<'r, K: ACLKind> hash::Hash for ACLEntry<'r, K> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ACLEntryMask {
+pub struct ACEMask {
     pub never: bool, 
 
     /// The entry's type
     pub entry_type: Option<AceType>,
 
-    /// See `AceFlags` in [ACE_HEADER](https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_ace_header)
     pub flags: ACE_FLAGS,
     pub flags_mask: ACE_FLAGS,
 
-    /// See [ACCESS_MASK](https://docs.microsoft.com/en-us/windows/desktop/secauthz/access-mask)
     pub access_mask: ACCESS_MASK,
     pub access_mask_mask: ACCESS_MASK,
 }
 
-impl ACLEntryMask {
+impl ACEMask {
     /// Returns an `ACLEntry` object with default values.
     #[inline]
     pub fn new() -> Self {
@@ -268,11 +266,13 @@ impl ACLEntryMask {
 
     //
 
+    #[inline]
     pub fn set_never( mut self ) -> Self {
         self.never = true;
         self
     }
 
+    #[inline]
     pub fn unset_never( mut self ) -> Self {
         self.never = false;
         self
@@ -280,11 +280,13 @@ impl ACLEntryMask {
 
     //
 
+    #[inline]
     pub fn set_entry_type( mut self, entry_type: AceType ) -> Self {
         self.entry_type = Some(entry_type);
         self
     }
 
+    #[inline]
     pub fn unset_entry_type( mut self ) -> Self {
         self.entry_type = None;
         self
@@ -292,18 +294,21 @@ impl ACLEntryMask {
 
     //
 
-    pub fn set_flags( mut self, flags: ACE_FLAGS ) -> Self {
-        self.flags = flags;
-        self.flags_mask = flags;
+    #[inline]
+    pub fn set_flags( mut self, flags: impl IntoAceFlags ) -> Self {
+        self.flags = flags.into_ace_flags();
+        self.flags_mask = self.flags;
         self
     }
 
-    pub fn set_flags_with_mask( mut self, flags: ACE_FLAGS, mask: ACE_FLAGS ) -> Self {
-        self.flags = flags;
-        self.flags_mask = mask;
+    #[inline]
+    pub fn set_flags_with_mask( mut self, flags: impl IntoAceFlags, mask: impl IntoAceFlags ) -> Self {
+        self.flags = flags.into_ace_flags();
+        self.flags_mask = mask.into_ace_flags();
         self
     }
 
+    #[inline]
     pub fn unset_flags( mut self ) -> Self {
         self.flags = ACE_FLAGS(0);
         self.flags_mask = ACE_FLAGS(0);
@@ -312,18 +317,21 @@ impl ACLEntryMask {
 
     //
 
-    pub fn set_access_mask( mut self, access_mask: ACCESS_MASK ) -> Self {
-        self.access_mask = access_mask;
-        self.access_mask_mask = access_mask;
+    #[inline]
+    pub fn set_access_mask( mut self, access_mask: impl IntoAccessMask ) -> Self {
+        self.access_mask = access_mask.into_access_mask();
+        self.access_mask_mask = self.access_mask;
         self
     }
 
-    pub fn set_access_mask_with_mask( mut self, access_mask: ACCESS_MASK, mask: ACCESS_MASK ) -> Self {
-        self.access_mask = access_mask;
-        self.access_mask_mask = mask;
+    #[inline]
+    pub fn set_access_mask_with_mask( mut self, access_mask: impl IntoAccessMask, mask: impl IntoAccessMask ) -> Self {
+        self.access_mask = access_mask.into_access_mask();
+        self.access_mask_mask = mask.into_access_mask();
         self
     }
 
+    #[inline]
     pub fn unset_access_mask( mut self ) -> Self {
         self.access_mask = ACCESS_MASK(0);
         self.access_mask_mask = ACCESS_MASK(0);
@@ -332,6 +340,7 @@ impl ACLEntryMask {
 
     //
 
+    #[inline]
     pub fn set_inherited_flag( mut self, bit: bool ) -> Self {
         
         self.flags &= !INHERITED_ACE;
@@ -345,10 +354,9 @@ impl ACLEntryMask {
         self
     }
 
-
 }
 
-impl fmt::Debug for ACLEntryMask {
+impl fmt::Debug for ACEMask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ACLEntryMask")
             .field( "never", &self.never )
@@ -361,6 +369,25 @@ impl fmt::Debug for ACLEntryMask {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ 
+pub trait IntoOptionalACEMask {
+    fn into_optional_mask( self ) -> Option<ACEMask>;
+}
+
+impl IntoOptionalACEMask for Option<ACEMask> {
+    #[inline]
+    fn into_optional_mask( self ) -> Option<ACEMask> {
+        self
+    }
+}
+
+impl IntoOptionalACEMask for ACEMask {
+    #[inline]
+    fn into_optional_mask( self ) -> Option<ACEMask> {
+        Some(self)
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -397,3 +424,21 @@ impl fmt::Debug for DebugAceFlags {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub trait IntoAceFlags {
+    fn into_ace_flags( self ) -> ACE_FLAGS;
+}
+
+impl IntoAceFlags for ACE_FLAGS {
+    #[inline]
+    fn into_ace_flags( self ) -> ACE_FLAGS {
+        self
+    }
+}
+
+impl IntoAceFlags for u32 {
+    #[inline]
+    fn into_ace_flags( self ) -> ACE_FLAGS {
+        ACE_FLAGS(self)
+    }
+}

@@ -1,7 +1,7 @@
 #![cfg(windows)]
 
 use crate::{
-    utils::current_user_account_name, ACLEntry, ACLKind, AceType, ACL, SID, VSID, ACLEntryIterator, ACLEntryMask, ACCESS_MASK,
+    utils::current_user_account_name, ACE, ACLKind, AceType, SD, SID, VSID, ACLEntryIterator, ACEMask, ACCESS_MASK,
 };
 use std::{
     env::current_exe,
@@ -119,7 +119,7 @@ fn sidstring_unit_test() {
     assert_eq!(sid_string, world_string_sid);
 }
 
-fn acl_entry_exists<'r, 'e, K: ACLKind>(entries: &Vec<ACLEntry<'r, K>>, expected: &ACLEntry<'e, K>) -> Option<usize> {
+fn acl_entry_exists<'r, 'e, K: ACLKind>(entries: &Vec<ACE<'r, K>>, expected: &ACE<'e, K>) -> Option<usize> {
     println!("entries = {:?}", entries);
     println!("expected = {:?}", expected);
 
@@ -170,15 +170,15 @@ fn query_dacl_unit_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let acl = ACL::from_file_path(path, false).unwrap();
+    let sd = SD::from_file_path(path, false).unwrap();
 
-    let entries = acl.dacl().all().unwrap();
+    let entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACLEntry::new_deny(
-        sids.guest.to_vsid().unwrap(),
-        ACE_FLAGS(0),
-        ((FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE).into(),
+    let expected = ACE::new_deny(
+        &sids.guest,
+        0,
+        (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE,
     );
 
     let deny_idx = match acl_entry_exists(&entries, &expected) {
@@ -192,10 +192,10 @@ fn query_dacl_unit_test() {
 
     //
 
-    let expected = ACLEntry::new_allow(
-        sids.guest.to_vsid().unwrap(),
-        ACE_FLAGS(0),
-        ((FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE).into(),
+    let expected = ACE::new_allow(
+        &sids.guest,
+        0,
+        (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) & !SYNCHRONIZE,
     );
 
     // // NOTE(andy): For ACL entries added by CmdLets on files, SYNCHRONIZE is not set
@@ -224,7 +224,7 @@ fn query_sacl_unit_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let acl = match ACL::from_file_path(path, true) {
+    let sd = match SD::from_file_path(path, true) {
         Ok(obj) => obj,
         Err(err) => {
             assert_eq!(err.code(), ERROR_NOT_ALL_ASSIGNED.into());
@@ -233,13 +233,13 @@ fn query_sacl_unit_test() {
         }
     };
 
-    let entries = acl.sacl().all().unwrap();
+    let entries = sd.sacl().all().unwrap();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACLEntry::new_audit(
-        sids.world.to_vsid().unwrap(),
+    let expected = ACE::new_audit(
+        &sids.world,
         SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG,
-        ((FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !SYNCHRONIZE).into(),
+        (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !SYNCHRONIZE,
     );
 
     let allow_idx = match acl_entry_exists(&entries, &expected) {
@@ -278,39 +278,39 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     //assert!(File::create(path).is_err());
     let file: File;
 
-    let mut acl = if use_handle {
+    let mut sd = if use_handle {
         file = OpenOptions::new()
             .access_mode(GENERIC_READ.0 | WRITE_DAC.0 )
             .open(path)
             .unwrap();
-        ACL::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
+        SD::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
     } else {
-        ACL::from_file_path(path, false).unwrap()
+        SD::from_file_path(path, false).unwrap()
     };
 
-    acl.update_dacl(|dacl| {
+    sd.update_dacl(|dacl| {
         dacl.add_allow(
-            sids.current_user.to_vsid().unwrap(),
-            ACE_FLAGS(0),
-            (FILE_GENERIC_READ | FILE_GENERIC_WRITE).into(),
+            &sids.current_user,
+            0,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
             None,
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
     // NOTE(andy): Our explicit allow entry should make this pass now
     assert!(File::create(path).is_ok());
 
-    let mut entries = acl.dacl().all().unwrap();
+    let mut entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACLEntry::new_allow(
-        sids.current_user.to_vsid().unwrap(),
-        ACE_FLAGS(0),
-        (FILE_GENERIC_READ | FILE_GENERIC_WRITE).into(),
+    let expected = ACE::new_allow(
+        &sids.current_user,
+        0,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE,
     );
 
     match acl_entry_exists(&entries, &expected) {
@@ -322,20 +322,20 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
         }
     };
 
-    acl.update_dacl(|dacl| {
+    sd.update_dacl(|dacl| {
         dacl.remove(
-            sids.current_user.as_ref().unwrap(),
-            Some(ACLEntryMask::new().set_entry_type(AceType::AccessAllow)),
+            sids.current_user.as_ref(),
+            ACEMask::new().set_entry_type(AceType::AccessAllow),
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
     // assert!(File::create(path).is_err());
 
-    entries = acl.dacl().all().unwrap();
+    entries = sd.dacl().all().unwrap();
     match acl_entry_exists(&entries, &expected) {
         None => {}
         Some(i) => {
@@ -374,40 +374,40 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     //             that the path exists (see line 375), this will attempt to open for write, which
     //             should succeed
     let create_res = OpenOptions::new()
-        .access_mode((GENERIC_WRITE.0 | WRITE_DAC.0) )
+        .access_mode(GENERIC_WRITE.0 | WRITE_DAC.0 )
         .open(path);
     assert!(create_res.is_ok());
     let file = create_res.unwrap();
 
-    let mut acl = if use_handle {
-        ACL::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
+    let mut sd = if use_handle {
+        SD::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
     } else {
-        ACL::from_file_path(path, false).unwrap()
+        SD::from_file_path(path, false).unwrap()
     };
 
-    acl.update_dacl(|dacl| {
+    sd.update_dacl(|dacl| {
         dacl.add_deny(
-            sids.current_user.to_vsid().unwrap(), 
-            ACE_FLAGS(0), 
-            FILE_GENERIC_WRITE.into(),
+            &sids.current_user, 
+            0, 
+            FILE_GENERIC_WRITE,
             None
         ) 
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
     // NOTE(andy): Since we added a deny entry for WRITE, this should fail
     assert!(File::create(path).is_err());
 
-    let mut entries = acl.dacl().all().unwrap();
+    let mut entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACLEntry::new_deny(
-        sids.current_user.to_vsid().unwrap(),
-        ACE_FLAGS(0),
-        FILE_GENERIC_WRITE.into(),
+    let expected = ACE::new_deny(
+        &sids.current_user,
+        0,
+        FILE_GENERIC_WRITE,
     );
 
     match acl_entry_exists(&entries, &expected) {
@@ -419,20 +419,20 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
         }
     }
 
-    acl.update_dacl(|dacl| {
+    sd.update_dacl(|dacl| {
         dacl.remove(
-            sids.current_user.as_ref().unwrap(),
-            Some(ACLEntryMask::new().set_entry_type(AceType::AccessDeny)),
+            sids.current_user.as_ref(),
+            ACEMask::new().set_entry_type(AceType::AccessDeny),
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
     assert!(File::open(path).is_ok());
 
-    entries = acl.dacl().all().unwrap_or(Vec::new());
+    entries = sd.dacl().all().unwrap_or(Vec::new());
     assert_ne!(entries.len(), 0);
 
     match acl_entry_exists(&entries, &expected) {
@@ -466,44 +466,44 @@ fn add_remove_sacl_mil() {
     let path = path_obj.to_str().unwrap_or("");
     assert_ne!(path.len(), 0);
 
-    let mut acl = ACL::from_file_path(path, true).unwrap();
+    let mut sd = SD::from_file_path(path, true).unwrap();
 
-    acl.update_sacl(|sacl| {
+    sd.update_sacl(|sacl| {
         sacl.add_mandatory_label(
-            low_mil_sid.to_vsid().unwrap(),
-            ACE_FLAGS(0),
-            ACCESS_MASK(SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP),
+            &low_mil_sid,
+            0,
+            SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP,
             None
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
-    let mut entries = acl.sacl().all().unwrap_or_default();
+    let mut entries = sd.sacl().all().unwrap_or_default();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACLEntry::new_mandatory_label(
-        low_mil_sid.to_vsid().unwrap(),
-        ACE_FLAGS(0),
-        ACCESS_MASK(SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP)
+    let expected = ACE::new_mandatory_label(
+        &low_mil_sid,
+        0,
+        SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP
     );
 
     assert!(acl_entry_exists(&entries, &expected).is_some());
 
-    acl.update_sacl(|sacl| {
+    sd.update_sacl(|sacl| {
         sacl.remove(
-            low_mil_sid.as_ref().unwrap(),
-            Some(ACLEntryMask::new().set_entry_type(AceType::SystemMandatoryLabel))
+            low_mil_sid.as_ref(),
+            ACEMask::new().set_entry_type(AceType::SystemMandatoryLabel)
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
-    entries = acl.sacl().all().unwrap();
+    entries = sd.sacl().all().unwrap();
 
     assert!(acl_entry_exists(&entries, &expected).is_none());
 }
@@ -520,43 +520,43 @@ fn add_remove_sacl_audit() {
     let path = path_obj.to_str().unwrap_or("");
     assert_ne!(path.len(), 0);
 
-    let mut acl = ACL::from_file_path(path, true).unwrap();
-    acl.update_sacl(|sacl| {
+    let mut sd = SD::from_file_path(path, true).unwrap();
+    sd.update_sacl(|sacl| {
         sacl.add_audit(
-            sids.current_user.to_vsid().unwrap(),
-            ACE_FLAGS(0),
-            FILE_GENERIC_READ.into(),
+            &sids.current_user,
+            0,
+            FILE_GENERIC_READ,
             None
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
-    let entries = acl.sacl().all().unwrap_or_default();
+    let entries = sd.sacl().all().unwrap_or_default();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACLEntry::new_audit(
-        sids.current_user.to_vsid().unwrap(),
-        ACE_FLAGS((SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG).0),
-        FILE_GENERIC_READ.into()
+    let expected = ACE::new_audit(
+        &sids.current_user,
+        SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG,
+        FILE_GENERIC_READ
     );
 
     assert!(acl_entry_exists(&entries, &expected).is_some());
 
-    acl.update_sacl(|sacl| {
+    sd.update_sacl(|sacl| {
         sacl.remove(
-            sids.current_user.as_ref().unwrap(), 
+            sids.current_user.as_ref(), 
             None
         )
     }).unwrap();
 
-    acl.write().unwrap();
+    sd.write().unwrap();
 
     //
 
-    let entries = acl.sacl().all().unwrap();
+    let entries = sd.sacl().all().unwrap();
 
     assert!(acl_entry_exists(&entries, &expected).is_none());
 }
@@ -572,58 +572,58 @@ fn acl_get_and_remove_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let mut acl = ACL::from_file_path(path, true).unwrap();
+    let mut sd = SD::from_file_path(path, true).unwrap();
 
     //
 
-    let results = acl.dacl().all_filtered(
-        sids.world.as_ref().unwrap(),
+    let results = sd.dacl().all_filtered(
+        sids.world.as_ref(),
         None
     ).unwrap();
     assert_eq!(results.len(), 0);
 
-    let results = acl.dacl().all_filtered(
-        sids.guest.as_ref().unwrap(),
+    let results = sd.dacl().all_filtered(
+        sids.guest.as_ref(),
         None
     ).unwrap();
     assert_eq!(results.len(), 3);
 
-    let results = acl.dacl().all_filtered(
-        sids.guest.as_ref().unwrap(),
-        Some(ACLEntryMask::new().set_entry_type(AceType::AccessAllow))
+    let results = sd.dacl().all_filtered(
+        sids.guest.as_ref(),
+        ACEMask::new().set_entry_type(AceType::AccessAllow)
     ).unwrap();
     assert_eq!(results.len(), 1);
 
-    let results = acl.dacl().all_filtered(
-        sids.guest.as_ref().unwrap(),
-        Some(ACLEntryMask::new().set_entry_type(AceType::AccessDeny))
+    let results = sd.dacl().all_filtered(
+        sids.guest.as_ref(),
+        ACEMask::new().set_entry_type(AceType::AccessDeny)
     ).unwrap();
     assert_eq!(results.len(), 1);
 
-    let results = acl.sacl().all_filtered(
-        sids.guest.as_ref().unwrap(),
-        Some(ACLEntryMask::new().set_entry_type(AceType::SystemAudit))
+    let results = sd.sacl().all_filtered(
+        sids.guest.as_ref(),
+        ACEMask::new().set_entry_type(AceType::SystemAudit)
     ).unwrap();
     assert_eq!(results.len(), 1);
 
     //
 
-    acl.update_dacl(|dacl| {
+    sd.update_dacl(|dacl| {
         dacl.remove(
-            sids.guest.as_ref().unwrap(), 
-            Some(ACLEntryMask::new().set_entry_type(AceType::AccessDeny))
+            sids.guest.as_ref(), 
+            ACEMask::new().set_entry_type(AceType::AccessDeny)
         )
     }).unwrap();
 
-    let results = acl.dacl().all_filtered(
-        sids.guest.as_ref().unwrap(), 
+    let results = sd.dacl().all_filtered(
+        sids.guest.as_ref(), 
         None
     ).unwrap();
     assert_eq!(results.len(), 2);
 
-    acl.update_dacl(|dacl| {
+    sd.update_dacl(|dacl| {
         dacl.remove(
-        sids.guest.as_ref().unwrap(), 
+        sids.guest.as_ref(), 
         None
         )
     }).unwrap();

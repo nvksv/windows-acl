@@ -207,17 +207,50 @@ impl default::Default for ACCESS_MASK {
     }
 }
 
-impl From<FILE_ACCESS_RIGHTS> for ACCESS_MASK {
-    fn from(value: FILE_ACCESS_RIGHTS) -> Self {
-        Self(value.0)
+// impl From<FILE_ACCESS_RIGHTS> for ACCESS_MASK {
+//     fn from(value: FILE_ACCESS_RIGHTS) -> Self {
+//         Self(value.0)
+//     }
+// }
+
+// impl From<ACCESS_MASK> for FILE_ACCESS_RIGHTS {
+//     fn from(value: ACCESS_MASK) -> Self {
+//         Self(value.0)
+//     }
+// }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub trait IntoAccessMask {
+    fn into_access_mask( self ) -> ACCESS_MASK;
+}
+
+impl IntoAccessMask for ACCESS_MASK {
+    #[inline]
+    fn into_access_mask( self ) -> ACCESS_MASK {
+        self
     }
 }
 
-impl From<ACCESS_MASK> for FILE_ACCESS_RIGHTS {
-    fn from(value: ACCESS_MASK) -> Self {
-        Self(value.0)
+impl IntoAccessMask for u32 {
+    #[inline]
+    fn into_access_mask( self ) -> ACCESS_MASK {
+        ACCESS_MASK(self)
     }
 }
+
+impl IntoAccessMask for FILE_ACCESS_RIGHTS {
+    #[inline]
+    fn into_access_mask( self ) -> ACCESS_MASK {
+        ACCESS_MASK(self.0)
+    }
+}
+
+// impl IntoAccessMask for FILE_ACCESS_RIGHTS {
+//     fn into_access_mask( self ) -> ACCESS_MASK {
+//         ACCESS_MASK(self.0)
+//     }
+// }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

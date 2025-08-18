@@ -34,11 +34,16 @@ use windows::{
 pub struct SIDRef<'r>( &'r [u8] );
 
 impl<'r> SIDRef<'r> {
-    pub unsafe fn from_psid( psid: PSID ) -> Result<Self> {
+    pub fn from_psid( psid: PSID ) -> Result<Option<Self>> {
         if psid.is_invalid() || !unsafe { IsValidSid(psid) }.as_bool() {
-            return Err(Error::empty());
+            return Ok(None);
         }
 
+        let sid = unsafe { Self::from_psid_unchecked(psid) }?;
+        Ok(Some(sid))
+    }
+
+    pub unsafe fn from_psid_unchecked( psid: PSID ) -> Result<Self> {
         let sid_size = unsafe { GetLengthSid(psid) };
 
         let sid = unsafe { slice::from_raw_parts( psid.0 as *const u8, sid_size as usize ) };
@@ -64,6 +69,10 @@ impl<'r> SIDRef<'r> {
         Ok(SID { 
             sid
         })
+    }
+
+    pub fn into_vsid( self ) -> VSID<'r> {
+        VSID::Ptr(self)
     }
 
     pub fn to_vsid<'s: 'r>( &'s self ) -> VSID<'s> {
@@ -162,7 +171,9 @@ impl<'r> SIDRef<'r> {
     }
 
     pub fn cmp_to_psid( &self, other: PSID ) -> Option<cmp::Ordering> {
-        let other_sidref = unsafe { Self::from_psid(other) }.ok()?;
+        let Some(other_sidref) = Self::from_psid(other).ok()? else {
+            return Some(cmp::Ordering::Greater);
+        };
 
         if self.eq( &other_sidref ) {
             return Some(cmp::Ordering::Equal);
@@ -221,12 +232,12 @@ pub struct SID {
 }
 
 impl SID {
-    #[inline]
-    pub fn empty() -> Self {
-        Self {
-            sid: vec![],
-        }
-    }
+    // #[inline]
+    // pub fn empty() -> Self {
+    //     Self {
+    //         sid: vec![],
+    //     }
+    // }
 
     pub fn from_ref( r: SIDRef ) -> Result<Self> {
         r.to_sid()
@@ -263,7 +274,7 @@ impl SID {
         match unsafe {
             CreateWellKnownSid(
                 well_known_sid_type, 
-                domain_sid.and_then(|sid| sid.psid()), 
+                domain_sid.map(|sid| sid.psid()), 
                 None,
                 &mut sid_size
             )        
@@ -286,7 +297,7 @@ impl SID {
         unsafe {
             CreateWellKnownSid(
                 well_known_sid_type, 
-                domain_sid.and_then(|sid| sid.psid()), 
+                domain_sid.map(|sid| sid.psid()), 
                 Some(PSID(sid.as_mut_ptr() as *mut c_void)),
                 &mut sid_size
             )        
@@ -480,17 +491,17 @@ impl SID {
 
     //
 
-    pub fn as_ref<'r>( &'r self ) -> Option<SIDRef<'r>> {
-        if self.is_valid() {
-            Some(SIDRef( self.sid.as_slice() ))
-        } else {
-            None
-        }
+    pub fn as_ref<'r>( &'r self ) -> SIDRef<'r> {
+        SIDRef( self.sid.as_slice() )
     }
 
-    pub fn to_vsid<'s>( &'s self ) -> Option<VSID<'s>> {
-        let r = self.as_ref()?;
-        Some(VSID::Ptr(r))
+    pub fn into_vsid( self ) -> VSID<'static> {
+        VSID::Value(self)
+    }
+
+    pub fn to_vsid<'s>( &'s self ) -> VSID<'s> {
+        let r = self.as_ref();
+        VSID::Ptr(r)
     }
 
     pub fn to_owned_vsid( &self ) -> VSID<'static> {
@@ -505,33 +516,14 @@ impl SID {
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
     pub fn to_string( &self ) -> Result<String> {
-        match self.as_ref() {
-            Some(r) => {
-                r.to_string()
-            },
-            None => {
-                Ok(String::new())
-            }
-        }
+        self.as_ref().to_string()
     }
 
     pub fn get_domain_of( &self ) -> Result<Self> {
-        match self.as_ref() {
-            Some(r) => {
-                r.get_domain_of()
-            },
-            None => {
-                Err(Error::empty())
-            }
-        }
+        self.as_ref().get_domain_of()
     }
 
     //
-
-    #[inline]
-    pub fn is_valid( &self ) -> bool {
-        !self.sid.is_empty()
-    }
 
     #[inline]
     pub fn len( &self ) -> u32 {
@@ -541,45 +533,29 @@ impl SID {
     //
 
     pub fn eq_to_psid( &self, other: PSID ) -> bool {
-        if !self.is_valid() || other.is_invalid() || !unsafe { IsValidSid(other) }.as_bool() {
+        if !other.is_invalid() || !unsafe { IsValidSid(other) }.as_bool() {
             return false;
         }
 
-        unsafe { EqualSid(self.psid_unchecked(), other) }.is_ok()
+        unsafe { EqualSid(self.psid(), other) }.is_ok()
     }
 
     pub fn eq_to_ref<'rr>( &self, other: SIDRef<'rr>) -> bool {
-        let self_ref = self.as_ref();
-        
-        match self_ref {
-            None => { false },
-            Some(s) => { s.eq(&other) }
-        }        
+        self.as_ref().eq(&other)
     }
 
     pub fn eq( &self, other: &Self ) -> bool {
-        if !self.is_valid() || !other.is_valid() {
-            return self.is_valid() == other.is_valid();
-        }
-
-        unsafe { EqualSid( self.psid_unchecked(), other.psid_unchecked() ) }.is_ok()
+        unsafe { EqualSid( self.psid(), other.psid() ) }.is_ok()
     }
 
     pub fn cmp_to_psid( &self, other: PSID ) -> Option<cmp::Ordering> {
         // Invalid, null or empty SIDs are always less then valid
 
-        let other_is_invalid = other.is_invalid() || !unsafe { IsValidSid(other) }.as_bool();
-        if !self.is_valid() || other_is_invalid {
-            return match (!self.is_valid(), other_is_invalid) {
-                (true, true) => { None },
-                (true, false) => { Some(cmp::Ordering::Less) },
-                (false, true) => { Some(cmp::Ordering::Greater) },
-                _ => { unreachable!(); },
-            }
-        }
+        let Some(other_sidref) = SIDRef::from_psid(other).ok()? else {
+            return Some(cmp::Ordering::Greater);
+        };
 
-        let self_sidref = self.as_ref().unwrap();
-        let other_sidref = unsafe { SIDRef::from_psid(other) }.ok()?;
+        let self_sidref = self.as_ref();
 
         self_sidref.cmp(&other_sidref)
     }
@@ -587,17 +563,8 @@ impl SID {
     pub fn cmp( &self, other: &Self ) -> Option<cmp::Ordering> {
         // Invalid, null or empty SIDs are always less then valid
 
-        if !self.is_valid() || !other.is_valid() {
-            return match (!self.is_valid(), !other.is_valid()) {
-                (true, true) => { Some(cmp::Ordering::Equal) },
-                (true, false) => { Some(cmp::Ordering::Less) },
-                (false, true) => { Some(cmp::Ordering::Greater) },
-                _ => { unreachable!(); },
-            }
-        }
-
-        let self_sidref = self.as_ref().unwrap();
-        let other_sidref = other.as_ref().unwrap();
+        let self_sidref = self.as_ref();
+        let other_sidref = other.as_ref();
 
         self_sidref.cmp(&other_sidref)
     }
@@ -605,17 +572,8 @@ impl SID {
     //
 
     #[inline(always)]
-    fn psid_unchecked( &self ) -> PSID {
+    pub fn psid( &self ) -> PSID {
         PSID(self.sid.as_ptr() as *mut c_void)
-    }
-
-    #[inline(always)]
-    pub fn psid( &self ) -> Option<PSID> {
-        if !self.is_valid() {
-            return None;
-        }
-
-        Some(self.psid_unchecked())
     }
 }
 
@@ -658,11 +616,10 @@ impl<'r> VSID<'r> {
     }
 
     pub unsafe fn from_psid( psid: PSID ) -> Result<Self> {
-        if psid.is_invalid() {
+        let Some(sidref) = SIDRef::from_psid(psid)? else {
             return Ok(MaybePtr::None);
-        }
+        };
 
-        let sidref = SIDRef::from_psid(psid)?;
         Ok(MaybePtr::Ptr(sidref))
     }
 
@@ -751,7 +708,7 @@ impl<'r> VSID<'r> {
                 Some(p.clone())
             },
             Self::Value(v) => {
-                v.as_ref()
+                Some(v.as_ref())
             }
         }
     }
@@ -777,12 +734,9 @@ impl<'r> VSID<'r> {
             Self::None => {
                 false
             },
-            Self::Ptr(_) => {
+            Self::Ptr(_) | Self::Value(_)=> {
                 true
             },
-            Self::Value(v) => {
-                v.is_valid()
-            }
         }
     }
 
@@ -790,7 +744,7 @@ impl<'r> VSID<'r> {
 
     pub fn eq_to_psid( &self, other: PSID) -> bool {
         let self_ref = self.as_ref();
-        let other_ref = unsafe { SIDRef::from_psid(other) }.ok();
+        let other_ref = SIDRef::from_psid(other).ok().flatten();
         
         match (self_ref, other_ref) {
             (None, None) => { true },
@@ -825,7 +779,7 @@ impl<'r> VSID<'r> {
         // Invalid, null or empty SIDs are always less then valid
 
         let self_ref = self.as_ref();
-        let other_ref = unsafe { SIDRef::from_psid(other) }.ok();
+        let other_ref = SIDRef::from_psid(other).ok().flatten();
         
         match (self_ref, other_ref) {
             (None, None) => { None },
@@ -860,7 +814,7 @@ impl<'r> VSID<'r> {
                 Some(p.psid())
             },
             Self::Value(v) => {
-                v.psid()
+                Some(v.psid())
             }
         }
     }
@@ -922,3 +876,34 @@ impl<'r> hash::Hash for VSID<'r> {
         }
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub trait IntoVSID<'s> {
+    fn into_vsid( self ) -> VSID<'s>;
+}
+
+impl<'s, 'r: 's> IntoVSID<'s> for SIDRef<'r> {
+    fn into_vsid( self ) -> VSID<'s> {
+        self.into_vsid()
+    }
+}
+
+impl<'s> IntoVSID<'s> for SID {
+    fn into_vsid( self ) -> VSID<'s> {
+        self.into_vsid()
+    }
+}
+
+impl<'s> IntoVSID<'s> for VSID<'s> {
+    fn into_vsid( self ) -> VSID<'s> {
+        self
+    }
+}
+
+impl<'s, 'r: 's> IntoVSID<'s> for &'r SID {
+    fn into_vsid( self ) -> VSID<'s> {
+        self.to_vsid()
+    }
+}
+

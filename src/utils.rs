@@ -9,6 +9,7 @@ use std::{
     mem,
     ops::Drop,
     os::windows::ffi::OsStrExt,
+    marker::PhantomData,
 };
 use windows::{
     core::{
@@ -60,7 +61,7 @@ use windows::{
 
 use crate::{
     acl_kind::{DACL, SACL},
-    acl_entry::ACLEntry,
+    ace::ACE,
     sid::VSID,
     types::{AceType, ACCESS_MASK}, ACLKind,
 };
@@ -71,6 +72,13 @@ pub enum MaybePtr<P, V> {
     None,
     Ptr(P),
     Value(V),
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub enum MaybeSet<U, S> {
+    Unset(U),
+    Set(S),
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -226,18 +234,19 @@ macro_rules! parse_entry {
 
             let entry_ptr: &$cls = unsafe { &* entry_ptr };
 
-            $entry.entry_type = $typ;
-            $entry.access_mask = ACCESS_MASK(entry_ptr.Mask);
-            $entry.flags = ACE_FLAGS($ptr.AceFlags as u32);
-            $entry.sid = unsafe{ VSID::from_psid(pSid) }?;
+            ACE {
+                entry_type: $typ,
+                sid: unsafe{ VSID::from_psid(pSid) }?,
+                flags: ACE_FLAGS($ptr.AceFlags as u32),
+                access_mask: ACCESS_MASK(entry_ptr.Mask),
+                _ph: PhantomData,
+            }
         }
     };
 }
 
-pub fn parse_dacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, DACL>> {
-    let mut entry = ACLEntry::new();
-
-    match hdr.AceType as u32 {
+pub fn parse_dacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACE<'r, DACL>> {
+    let entry = match hdr.AceType as u32 {
         ACCESS_ALLOWED_ACE_TYPE => {
             parse_entry!(
                 entry,
@@ -297,15 +306,13 @@ pub fn parse_dacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, DACL>> {
         _ => {
             return Err(Error::empty());
         }
-    }
+    };
 
     Ok(entry)
 }
 
-pub fn parse_sacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, SACL>> {
-    let mut entry = ACLEntry::new();
-
-    match hdr.AceType as u32 {
+pub fn parse_sacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACE<'r, SACL>> {
+    let entry = match hdr.AceType as u32 {
         SYSTEM_AUDIT_ACE_TYPE => {
             parse_entry!(
                 entry,
@@ -341,22 +348,22 @@ pub fn parse_sacl_ace<'r>( hdr: &'r ACE_HEADER ) -> Result<ACLEntry<'r, SACL>> {
                 hdr => SYSTEM_MANDATORY_LABEL_ACE
             )
         },
-        SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE => {
-            parse_entry!(
-                entry,
-                AceType::SystemResourceAttribute,
-                hdr => SYSTEM_RESOURCE_ATTRIBUTE_ACE
-            )
-        },
+        // SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE => {
+        //     parse_entry!(
+        //         entry,
+        //         AceType::SystemResourceAttribute,
+        //         hdr => SYSTEM_RESOURCE_ATTRIBUTE_ACE
+        //     )
+        // },
         _ => {
             return Err(Error::empty());
         }
-    }
+    };
 
     Ok(entry)
 }
 
-pub fn write_dacl_ace<'r>( pacl: *mut _ACL, entry: &ACLEntry<'r, DACL> ) -> Result<()> {
+pub fn write_dacl_ace<'r>( pacl: *mut _ACL, entry: &ACE<'r, DACL> ) -> Result<()> {
     let psid = entry.psid().ok_or_else(|| Error::empty())?;
 
     match entry.entry_type {
@@ -390,7 +397,7 @@ pub fn write_dacl_ace<'r>( pacl: *mut _ACL, entry: &ACLEntry<'r, DACL> ) -> Resu
     Ok(())
 }
 
-pub fn write_sacl_ace<'r>( pacl: *mut _ACL, entry: &ACLEntry<'r, SACL> ) -> Result<()> {
+pub fn write_sacl_ace<'r>( pacl: *mut _ACL, entry: &ACE<'r, SACL> ) -> Result<()> {
     let psid = entry.psid().ok_or_else(|| Error::empty())?;
 
     match entry.entry_type {
