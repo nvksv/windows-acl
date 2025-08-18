@@ -170,10 +170,8 @@ fn query_dacl_unit_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let acl_result = ACL::from_file_path(path, false);
-    assert!(acl_result.is_ok());
+    let acl = ACL::from_file_path(path, false).unwrap();
 
-    let acl = acl_result.unwrap();
     let entries = acl.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
 
@@ -301,6 +299,8 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
 
     acl.write().unwrap();
 
+    //
+
     // NOTE(andy): Our explicit allow entry should make this pass now
     assert!(File::create(path).is_ok());
 
@@ -328,6 +328,10 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
             Some(ACLEntryMask::new().set_entry_type(AceType::AccessAllow)),
         )
     }).unwrap();
+
+    acl.write().unwrap();
+
+    //
 
     // assert!(File::create(path).is_err());
 
@@ -389,7 +393,10 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
             None
         ) 
     }).unwrap();
-        
+
+    acl.write().unwrap();
+
+    //
 
     // NOTE(andy): Since we added a deny entry for WRITE, this should fail
     assert!(File::create(path).is_err());
@@ -418,6 +425,10 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
             Some(ACLEntryMask::new().set_entry_type(AceType::AccessDeny)),
         )
     }).unwrap();
+
+    acl.write().unwrap();
+
+    //
 
     assert!(File::open(path).is_ok());
 
@@ -466,6 +477,10 @@ fn add_remove_sacl_mil() {
         )
     }).unwrap();
 
+    acl.write().unwrap();
+
+    //
+
     let mut entries = acl.sacl().all().unwrap_or_default();
     assert_ne!(entries.len(), 0);
 
@@ -483,6 +498,10 @@ fn add_remove_sacl_mil() {
             Some(ACLEntryMask::new().set_entry_type(AceType::SystemMandatoryLabel))
         )
     }).unwrap();
+
+    acl.write().unwrap();
+
+    //
 
     entries = acl.sacl().all().unwrap();
 
@@ -511,10 +530,14 @@ fn add_remove_sacl_audit() {
         )
     }).unwrap();
 
-    let mut entries = acl.sacl().all().unwrap_or_default();
+    acl.write().unwrap();
+
+    //
+
+    let entries = acl.sacl().all().unwrap_or_default();
     assert_ne!(entries.len(), 0);
 
-    let mut expected = ACLEntry::new_audit(
+    let expected = ACLEntry::new_audit(
         sids.current_user.to_vsid().unwrap(),
         ACE_FLAGS((SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG).0),
         FILE_GENERIC_READ.into()
@@ -529,7 +552,11 @@ fn add_remove_sacl_audit() {
         )
     }).unwrap();
 
-    entries = acl.sacl().all().unwrap();
+    acl.write().unwrap();
+
+    //
+
+    let entries = acl.sacl().all().unwrap();
 
     assert!(acl_entry_exists(&entries, &expected).is_none());
 }
@@ -547,27 +574,29 @@ fn acl_get_and_remove_test() {
 
     let mut acl = ACL::from_file_path(path, true).unwrap();
 
-    let mut results = acl.dacl().all_filtered(
+    //
+
+    let results = acl.dacl().all_filtered(
         sids.world.as_ref().unwrap(),
         None
     ).unwrap();
     assert_eq!(results.len(), 0);
 
-    results = acl.dacl().all_filtered(
-        sids.world.as_ref().unwrap(),
+    let results = acl.dacl().all_filtered(
+        sids.guest.as_ref().unwrap(),
         None
     ).unwrap();
     assert_eq!(results.len(), 3);
 
-    results = acl.dacl().all_filtered(
+    let results = acl.dacl().all_filtered(
         sids.guest.as_ref().unwrap(),
         Some(ACLEntryMask::new().set_entry_type(AceType::AccessAllow))
     ).unwrap();
     assert_eq!(results.len(), 1);
 
-    results = acl.dacl().all_filtered(
+    let results = acl.dacl().all_filtered(
         sids.guest.as_ref().unwrap(),
-        Some(ACLEntryMask::new().set_entry_type(AceType::AccessAllow))
+        Some(ACLEntryMask::new().set_entry_type(AceType::AccessDeny))
     ).unwrap();
     assert_eq!(results.len(), 1);
 
@@ -577,13 +606,14 @@ fn acl_get_and_remove_test() {
     ).unwrap();
     assert_eq!(results.len(), 1);
 
-    let mut removed = acl.dacl().iter()
-        .remove(
+    //
+
+    acl.update_dacl(|dacl| {
+        dacl.remove(
             sids.guest.as_ref().unwrap(), 
             Some(ACLEntryMask::new().set_entry_type(AceType::AccessDeny))
-        ).unwrap()
-        .try_collect::<Vec<_>>().unwrap();
-    assert_eq!(removed.len(), 1);
+        )
+    }).unwrap();
 
     let results = acl.dacl().all_filtered(
         sids.guest.as_ref().unwrap(), 
@@ -591,12 +621,11 @@ fn acl_get_and_remove_test() {
     ).unwrap();
     assert_eq!(results.len(), 2);
 
-    removed = acl.dacl().iter()
-        .remove(
+    acl.update_dacl(|dacl| {
+        dacl.remove(
         sids.guest.as_ref().unwrap(), 
         None
-        ).unwrap()
-        .try_collect::<Vec<_>>().unwrap();
-    assert_eq!(removed.len(), 1);
+        )
+    }).unwrap();
 
 }
