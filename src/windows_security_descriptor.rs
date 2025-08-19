@@ -331,6 +331,66 @@ impl WindowsSecurityDescriptor {
         Ok(())
     }
 
+    pub fn take_ownership<'s>(
+        source: &SDSource,
+        obj_type: SE_OBJECT_TYPE,
+        owner: SIDRef<'s>
+    ) -> Result<()> {
+        let mut privilege = SystemPrivilege::by_name("SeTakeOwnershipPrivilege")?;
+        privilege.acquire()?;
+
+        let result = Self::take_ownership_with_privilege( source, obj_type, owner );
+
+        privilege.release()?;
+
+        result
+    }
+
+    fn take_ownership_with_privilege<'s>(
+        source: &SDSource,
+        obj_type: SE_OBJECT_TYPE,
+        owner: SIDRef<'s>
+    ) -> Result<()> {
+        let flags = OWNER_SECURITY_INFORMATION;
+
+        let ret = match *source {
+            SDSource::Handle(handle) => unsafe {
+                SetSecurityInfo(
+                    handle,
+                    obj_type,
+                    flags,
+                    Some(owner.psid()),
+                    None,
+                    None,
+                    None,
+                )
+            },
+            SDSource::Path(ref path) => {
+                let mut wPath: Vec<u16> = str_to_wstr(path);
+                let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+                unsafe {
+                    SetNamedSecurityInfoW(
+                        wPath,
+                        obj_type,
+                        flags,
+                        Some(owner.psid()),
+                        None,
+                        None,
+                        None,
+                    )
+                }
+            }
+        };
+
+        if ret != ERROR_SUCCESS {
+            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+
     fn read_dacl_from_descriptor( &mut self ) -> Result<()> {
         let mut dacl_present: BOOL = BOOL(0);
         let mut dacl_defaulted: BOOL = BOOL(0);
@@ -692,9 +752,15 @@ impl WindowsInheritedFrom {
         item.GenerationGap
     }
 
-    pub fn ancestor_name( item: &INHERITED_FROMW ) -> Result<String> {
-        unsafe { item.AncestorName.to_string() }
-            .map_err(|_| Error::empty())
+    pub fn ancestor_name( item: &INHERITED_FROMW ) -> Result<Option<String>> {
+        if item.AncestorName.is_null() {
+            return Ok(None)
+        }
+        
+        let name = unsafe { item.AncestorName.to_string() }
+            .map_err(|_| Error::empty())?;
+
+        Ok(Some(name))
     }
 
     pub fn free( &mut self ) -> Result<()> {

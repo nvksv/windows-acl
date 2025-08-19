@@ -50,26 +50,18 @@ use windows::{
         }
     },
 };
-use fallible_iterator::FallibleIterator;
 use crate::{
-    acl_kind::{ACLKind, DACL, SACL},
-    ace::ACE, 
-    acl::{
-        ACL, AceEntryIterator, ACLVecList, ACLEntryIterator, ACEWithInheritedFromIterator,
-    }, 
-    windows_security_descriptor::{
+    ace::ACE, acl::{
+        ACEWithInheritedFromIterator, ACLEntryIterator, ACLVecList, AceEntryIterator, ACL
+    }, acl_kind::{ACLKind, DACL, SACL}, sid::{SIDRef, VSID}, types::*, utils::DebugUnpretty, windows_security_descriptor::{
         SDSource, WindowsSecurityDescriptor,
-    }, 
-    sid::{SIDRef, VSID}, 
-    types::*, 
-    utils::{acl_size, as_ppvoid_mut, as_pvoid_mut, parse_dacl_ace, parse_sacl_ace, vec_as_pacl_mut, write_dacl_ace, write_sacl_ace, str_to_wstr}, 
+    }, SID 
     
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// `SD` represents the access control list (discretionary or oth discretionary/system) for a named object
-#[derive(Debug)]
 pub struct SD {
     descriptor: WindowsSecurityDescriptor,
     source: SDSource,
@@ -454,6 +446,28 @@ impl SD {
 
     //
 
+    pub fn take_ownership_from_file_path<'s>( path: &str, object_type: SE_OBJECT_TYPE ) -> Result<()> {
+        let source = SDSource::Path(path.to_owned());
+        let current_user = SID::current_user()?;
+        WindowsSecurityDescriptor::take_ownership(&source, object_type, current_user.as_ref())
+    }
 
 }
 
+impl fmt::Debug for SD {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let dacl_entries = self.dacl().all().unwrap_or_default();
+        let sacl_entries = self.sacl().all().unwrap_or_default();
+        let owner = self.owner().unwrap_or_default();
+        let group = self.group().unwrap_or_default();
+
+        f.debug_struct("SD")
+            .field("dacl_is_protected", &self.dacl_is_protected() )
+            .field("sacl_is_protected", &self.sacl_is_protected() )
+            .field("dacl", &dacl_entries )
+            .field("sacl", &sacl_entries )
+            .field("owner", &DebugUnpretty(owner) )
+            .field("group", &DebugUnpretty(group) )
+            .finish()
+    }
+}

@@ -5,18 +5,23 @@ use std::marker::PhantomData;
 use windows::{
     core::Result,
     Win32::{
-        Security::Authorization::{
+        Foundation::{
+            GENERIC_ACCESS_RIGHTS,
+        },
+        Security::{
+            Authorization::{
                 SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
                 SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
-                SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
+                SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT, 
             }, 
+        },
         Storage::FileSystem::{
             FILE_ACCESS_RIGHTS, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_APPEND_DATA, DELETE, FILE_DELETE_CHILD,
             FILE_EXECUTE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
             FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_READ_EA, FILE_TRAVERSE, FILE_WRITE_ATTRIBUTES,
             FILE_WRITE_DATA, FILE_WRITE_EA, READ_CONTROL, SPECIFIC_RIGHTS_ALL, STANDARD_RIGHTS_ALL,
             STANDARD_RIGHTS_EXECUTE, STANDARD_RIGHTS_READ, STANDARD_RIGHTS_REQUIRED, STANDARD_RIGHTS_WRITE,
-            SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
+            SYNCHRONIZE, WRITE_DAC, WRITE_OWNER, 
         },
     },
 };
@@ -97,6 +102,14 @@ impl IntoAccessMask for FILE_ACCESS_RIGHTS {
         ACCESS_MASK(self.0)
     }
 }
+
+impl IntoAccessMask for GENERIC_ACCESS_RIGHTS {
+    #[inline]
+    fn into_access_mask( self ) -> ACCESS_MASK {
+        ACCESS_MASK(self.0)
+    }
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -229,7 +242,11 @@ pub trait AccessMaskIdents {
         Some(DebugIdent("0x80000000"))
     }
 
-    fn bits_0012_00A0() -> Option<DebugIdent> {
+    fn bits_0000_FFFF() -> Option<DebugIdent> {
+        None
+    }
+
+    fn bits_0012_0089() -> Option<DebugIdent> {
         None
     }
 
@@ -237,10 +254,17 @@ pub trait AccessMaskIdents {
         None
     }
 
-    fn bits_0012_00A0() -> Option<DebugIdent> {
+    fn bits_0012_0116() -> Option<DebugIdent> {
         None
     }
 
+    fn bits_000F_0000() -> Option<DebugIdent> {
+        None
+    }
+
+    fn bits_001F_0000() -> Option<DebugIdent> {
+        None
+    }
 }
 
 pub struct FileAccessRightsFullIdents {}
@@ -289,6 +313,14 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
         Some(DebugIdent("DELETE"))
     }
 
+    fn bit_0002_0000() -> Option<DebugIdent> {
+        // pub const STANDARD_RIGHTS_EXECUTE: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(131072u32);
+        // pub const STANDARD_RIGHTS_READ: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(131072u32);
+        // pub const STANDARD_RIGHTS_REQUIRED: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(983040u32);
+        // pub const STANDARD_RIGHTS_WRITE: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(131072u32);
+        Some(DebugIdent("READ_CONTROL"))
+    }
+
     fn bit_0004_0000() -> Option<DebugIdent> {
         Some(DebugIdent("WRITE_DAC"))
     }
@@ -301,9 +333,122 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
         Some(DebugIdent("SYNCHRONIZE"))
     }
 
+    fn bits_0000_FFFF() -> Option<DebugIdent> {
+        Some(DebugIdent("SPECIFIC_RIGHTS_ALL"))
+    }
+
+    fn bits_000F_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("STANDARD_RIGHTS_REQUIRED"))
+    }
+
+    fn bits_0012_0089() -> Option<DebugIdent> {
+        Some(DebugIdent("GENERIC_READ"))
+    }
+
     fn bits_0012_00A0() -> Option<DebugIdent> {
         Some(DebugIdent("GENERIC_EXECUTE"))
     }
+
+    fn bits_0012_0116() -> Option<DebugIdent> {
+        Some(DebugIdent("GENERIC_WRITE"))
+    }
+
+    fn bits_001F_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("STANDARD_RIGHTS_ALL"))
+    }
+
+}
+
+pub struct FileAccessRightsShortIdents {}
+
+impl AccessMaskIdents for FileAccessRightsShortIdents {
+    fn bit_0000_0001() -> Option<DebugIdent> {
+        debug_assert!( FILE_LIST_DIRECTORY == FILE_READ_DATA );
+        Some(DebugIdent("LD/R"))
+    }
+
+    fn bit_0000_0002() -> Option<DebugIdent> {
+        debug_assert!( FILE_ADD_FILE == FILE_WRITE_DATA );
+        Some(DebugIdent("AF/W"))
+    }
+
+    fn bit_0000_0004() -> Option<DebugIdent> {
+        debug_assert!( FILE_ADD_SUBDIRECTORY == FILE_APPEND_DATA );
+        Some(DebugIdent("AS/A"))
+    }
+
+    fn bit_0000_0008() -> Option<DebugIdent> {
+        Some(DebugIdent("RE"))
+    }
+
+    fn bit_0000_0010() -> Option<DebugIdent> {
+        Some(DebugIdent("WE"))
+    }
+
+    fn bit_0000_0020() -> Option<DebugIdent> {
+        Some(DebugIdent("E/T"))
+    }
+
+    fn bit_0000_0040() -> Option<DebugIdent> {
+        Some(DebugIdent("DC"))
+    }
+
+    fn bit_0000_0080() -> Option<DebugIdent> {
+        Some(DebugIdent("RA"))
+    }
+
+    fn bit_0000_0100() -> Option<DebugIdent> {
+        Some(DebugIdent("WA"))
+    }
+
+    fn bit_0001_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("D"))
+    }
+
+    fn bit_0002_0000() -> Option<DebugIdent> {
+        // pub const STANDARD_RIGHTS_EXECUTE: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(131072u32);
+        // pub const STANDARD_RIGHTS_READ: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(131072u32);
+        // pub const STANDARD_RIGHTS_REQUIRED: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(983040u32);
+        // pub const STANDARD_RIGHTS_WRITE: FILE_ACCESS_RIGHTS = FILE_ACCESS_RIGHTS(131072u32);
+        Some(DebugIdent("RC"))
+    }
+
+    fn bit_0004_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("WD"))
+    }
+
+    fn bit_0008_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("WO"))
+    }
+
+    fn bit_0010_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("S"))
+    }
+
+    fn bits_0000_FFFF() -> Option<DebugIdent> {
+        Some(DebugIdent("SPRA"))
+    }
+
+    fn bits_000F_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("STRR"))
+    }
+
+    fn bits_0012_0089() -> Option<DebugIdent> {
+        Some(DebugIdent("GR"))
+    }
+
+    fn bits_0012_00A0() -> Option<DebugIdent> {
+        Some(DebugIdent("GE"))
+    }
+
+    fn bits_0012_0116() -> Option<DebugIdent> {
+        Some(DebugIdent("GW"))
+    }
+
+    fn bits_001F_0000() -> Option<DebugIdent> {
+        Some(DebugIdent("STRA"))
+    }
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -519,46 +664,40 @@ impl<N: AccessMaskIdents> fmt::Debug for DebugFileAccessRights<N> {
             }
         }
 
-
-
-        // 0x_0012_0089
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_GENERIC_READ) {
-            f.field(&DebugIdent("ENERIC_READ"));
+        if self.access_mask.contains(ACCESS_MASK(0x_0000_FFFF)) {
+            if let Some(ident) = N::bits_0000_FFFF() {
+                f.field(&ident);
+            }
         }
 
-        // 0x_0012_0116
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(FILE_GENERIC_WRITE) {
-            f.field(&DebugIdent("ENERIC_WRITE"));
+        if self.access_mask.contains(ACCESS_MASK(0x_000F_0000)) {
+            if let Some(ident) = N::bits_000F_0000() {
+                f.field(&ident);
+            }
         }
 
-        // 0x_0000_FFFF
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(SPECIFIC_RIGHTS_ALL) {
-            f.field(&DebugIdent("SPECIFIC_RIGHTS_ALL"));
+        if self.access_mask.contains(ACCESS_MASK(0x_0012_0089)) {
+            if let Some(ident) = N::bits_0012_0089() {
+                f.field(&ident);
+            }
         }
 
-        // 0x_0000_FFFF
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_ALL) {
-            f.field(&DebugIdent("STANDARD_RIGHTS_ALL"));
+        if self.access_mask.contains(ACCESS_MASK(0x_0012_00A0)) {
+            if let Some(ident) = N::bits_0012_00A0() {
+                f.field(&ident);
+            }
         }
 
-        // 0x_0002_0000
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_EXECUTE) {
-            f.field(&DebugIdent("STANDARD_RIGHTS_EXECUTE"));
+        if self.access_mask.contains(ACCESS_MASK(0x_0012_0116)) {
+            if let Some(ident) = N::bits_0012_0116() {
+                f.field(&ident);
+            }
         }
 
-        // 0x_0002_0000
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_READ) {
-            f.field(&DebugIdent("STANDARD_RIGHTS_READ"));
-        }
-
-        // 0x_0002_0000
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_REQUIRED) {
-            f.field(&DebugIdent("STANDARD_RIGHTS_REQUIRED"));
-        }
-
-        // 0x_0002_0000
-        if FILE_ACCESS_RIGHTS(self.0.0).contains(STANDARD_RIGHTS_WRITE) {
-            f.field(&DebugIdent("STANDARD_RIGHTS_WRITE"));
+        if self.access_mask.contains(ACCESS_MASK(0x_001F_0000)) {
+            if let Some(ident) = N::bits_001F_0000() {
+                f.field(&ident);
+            }
         }
 
         f.finish()

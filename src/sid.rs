@@ -4,9 +4,7 @@ use core::{
     ffi::c_void, fmt, mem, ptr::null_mut, slice, cmp, hash
 };
 use std::fmt::Debug;
-use crate::{
-    utils::{str_to_wstr, MaybePtr},
-};
+use crate::utils::{str_to_wstr, DebugUnpretty, MaybePtr};
 use windows::{
     core::{
         Error, Result, HRESULT, PWSTR  
@@ -18,7 +16,11 @@ use windows::{
         Security::{
             Authorization::{
                 ConvertSidToStringSidW, ConvertStringSidToSidW,
-            }, CopySid, CreateWellKnownSid, EqualSid, GetLengthSid, GetTokenInformation, GetWindowsAccountDomainSid, IsValidSid, LookupAccountNameW, TokenUser, PSID, SID_NAME_USE, TOKEN_QUERY, WELL_KNOWN_SID_TYPE, SID_AND_ATTRIBUTES, SECURITY_MAX_SID_SIZE,
+            }, 
+            CopySid, CreateWellKnownSid, EqualSid, GetLengthSid, GetTokenInformation, 
+            GetWindowsAccountDomainSid, IsValidSid, LookupAccountNameW, TokenUser, PSID, 
+            SID_NAME_USE, TOKEN_QUERY, WELL_KNOWN_SID_TYPE, SID_AND_ATTRIBUTES, 
+            SECURITY_MAX_SID_SIZE, LookupAccountSidW,
         },
         System::Threading::{
                 GetCurrentProcess, OpenProcessToken,
@@ -82,6 +84,63 @@ impl<'r> SIDRef<'r> {
     pub fn to_owned_vsid( &self ) -> Result<VSID<'static>> {
         let sid = self.to_sid()?;
         Ok(VSID::Value(sid))
+    }
+
+    pub fn lookup_account_name( &self, domain_name: Option<&str> ) -> Result<(String, String)> {
+        let mut domain_name: Option<Vec<u16>> = domain_name.map(|domain_name| str_to_wstr(domain_name));
+        let domain_name = domain_name.as_mut()
+            .map(|domain_name| PWSTR::from_raw(domain_name.as_mut_ptr()))
+            .unwrap_or(PWSTR::null());
+
+        let mut name_len: u32 = 0;
+        let mut referenced_domain_name_len: u32 = 0;
+        let mut sid_type: SID_NAME_USE = SID_NAME_USE(0);
+
+        match unsafe {
+            LookupAccountSidW(
+                domain_name,
+                self.psid(),
+                None,
+                &mut name_len,
+                None,
+                &mut referenced_domain_name_len,
+                &mut sid_type
+            )
+        } {
+            Ok(()) => {
+                return Err(Error::empty());
+            },
+            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+                return Err(e);
+            },
+            Err(_) => {}
+
+        };
+
+        let mut name = [0_u16].repeat( (name_len as usize) + 1 );
+        let mut referenced_domain_name = [0_u16].repeat( (referenced_domain_name_len as usize) + 1 );
+
+        let name = PWSTR::from_raw(name.as_mut_ptr());
+        let referenced_domain_name = PWSTR::from_raw(referenced_domain_name.as_mut_ptr());
+
+        unsafe {
+            LookupAccountSidW(
+                domain_name,
+                self.psid(),
+                Some(name),
+                &mut name_len,
+                Some(referenced_domain_name),
+                &mut referenced_domain_name_len,
+                &mut sid_type
+            )
+        }?;
+
+        let name = unsafe { name.to_string() }
+            .map_err(|_| Error::empty())?;
+        let referenced_domain_name = unsafe { referenced_domain_name.to_string() }
+            .map_err(|_| Error::empty())?;
+
+        Ok((name, referenced_domain_name))
     }
 
     /// Converts a raw SID into a SID string representation.
@@ -197,16 +256,29 @@ impl<'r> SIDRef<'r> {
 
 impl<'r> fmt::Debug for SIDRef<'r> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = f.debug_tuple("SIDRef");
-        let f = match self.to_string() {
-            Ok(s) => {
-                f.field(&s)
+        let sid_str = match self.lookup_account_name(None) {
+            Ok((name, mut domain_name)) => {
+                if !domain_name.is_empty() {
+                    domain_name.push('\\');   
+                    domain_name.push_str(&name);   
+                    domain_name
+                } else {
+                    name
+                }
             },
             Err(_) => {
-                f.field(&self.0)
+                match self.to_string() {
+                    Ok(s) => {
+                        s
+                    },
+                    Err(_) => {
+                        format!( "{:?}", &self.0 )
+                    }
+                }
             }
         };
-        f.finish()
+
+        f.write_fmt(format_args!("SIDRef({:?})", &sid_str))
     }
 }
 
@@ -232,13 +304,6 @@ pub struct SID {
 }
 
 impl SID {
-    // #[inline]
-    // pub fn empty() -> Self {
-    //     Self {
-    //         sid: vec![],
-    //     }
-    // }
-
     pub fn from_ref( r: SIDRef ) -> Result<Self> {
         r.to_sid()
     }

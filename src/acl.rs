@@ -28,7 +28,7 @@ use fallible_iterator::FallibleIterator;
 
 use crate::{
     acl_kind::{ACLKind, IsACLKind, DACL, SACL},
-    ace::{ACE, ACEMask, AVERAGE_ACE_SIZE, MAX_ACL_SIZE, IntoOptionalACEMask}, 
+    ace::{ACE, ACEFilter, AVERAGE_ACE_SIZE, MAX_ACL_SIZE, IntoOptionalACEFilter}, 
     sid::{SIDRef, VSID, IntoVSID}, 
     types::*, 
     utils::{as_ppvoid_mut, vec_as_pacl_mut},
@@ -66,7 +66,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.    
     #[inline]
-    fn add<'e: 'r, 's>( self, entry: ACE<'e, K>, filter: impl IntoOptionalACEMask ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn add<'e: 'r, 's>( self, entry: ACE<'e, K>, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
         ACLListEntryAdder::new(
             self, 
             entry, 
@@ -75,7 +75,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     }
 
     #[inline]
-    fn add_allow<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEMask ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
+    fn add_allow<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
         self.add(
             ACE::new_allow( sid, flags, access_mask ), 
             filter.into_optional_mask()
@@ -83,7 +83,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     }
 
     #[inline]
-    fn add_deny<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEMask ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
+    fn add_deny<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
         self.add(
             ACE::new_deny( sid, flags, access_mask ), 
             filter.into_optional_mask()
@@ -91,7 +91,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     }
 
     #[inline]
-    fn add_audit<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEMask ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
+    fn add_audit<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
         self.add(
             ACE::new_audit( sid, flags, access_mask ), 
             filter.into_optional_mask()
@@ -99,7 +99,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     }
 
     #[inline]
-    fn add_mandatory_label<'s: 'r>( self, label_sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEMask ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
+    fn add_mandatory_label<'s: 'r>( self, label_sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
         self.add(
             ACE::new_mandatory_label( label_sid, flags, access_mask ), 
             filter.into_optional_mask()
@@ -118,11 +118,18 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     ///
     /// # Errors
     /// On error, a Windows error code wrapped in a `Err` type.
-    fn remove<'s>( self, sid: SIDRef<'s>, filter: impl IntoOptionalACEMask ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn remove<'s>( self, sid: SIDRef<'s>, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
         ACLListEntryRemover::new(
             self, 
             sid,
             filter.into_optional_mask()
+        )
+    }
+
+    fn remove_any_sid<'s>( self, filter: ACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+        ACLListEntryRemover::new_any_sid(
+            self, 
+            filter
         )
     }
 
@@ -181,7 +188,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, mask: impl IntoOptionalACEMask ) -> Result<Vec<ACE<'r, K>>> {
+    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, mask: impl IntoOptionalACEFilter ) -> Result<Vec<ACE<'r, K>>> {
         let mask = mask.into_optional_mask();
 
         self.iter()
@@ -578,11 +585,11 @@ where
 pub struct ACLListEntryAdder<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> {
     inner: I,
     entry: Option<ACE<'r, K>>,
-    filter: Option<ACEMask>,
+    filter: Option<ACEFilter>,
 }
 
 impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryAdder<'r, I, K> {
-    pub fn new( inner: I, entry: ACE<'r, K>, filter: Option<ACEMask> ) -> Result<Self> {
+    pub fn new( inner: I, entry: ACE<'r, K>, filter: Option<ACEFilter> ) -> Result<Self> {
         let _ = entry.sid.as_ref().ok_or_else(|| Error::empty())?;
         Ok(Self {
             inner,
@@ -630,18 +637,28 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLEntryIterator<'r, K> for ACL
 
 pub struct ACLListEntryRemover<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> {
     inner: I,
-    sid: SIDRef<'s>,
-    filter: Option<ACEMask>,
+    sid: Option<SIDRef<'s>>,
+    filter: Option<ACEFilter>,
     _ph_r: PhantomData<&'r ()>,
     _ph_k: PhantomData<K>,
 }
 
 impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryRemover<'r, 's, I, K> {
-    pub fn new( inner: I, sid: SIDRef<'s>, filter: Option<ACEMask> ) -> Result<Self> {
+    pub fn new( inner: I, sid: SIDRef<'s>, filter: Option<ACEFilter> ) -> Result<Self> {
         Ok(Self {
             inner,
-            sid,
+            sid: Some(sid),
             filter,
+            _ph_r: PhantomData,
+            _ph_k: PhantomData,
+        })
+    }
+
+    pub fn new_any_sid( inner: I, filter: ACEFilter ) -> Result<Self> {
+        Ok(Self {
+            inner,
+            sid: None,
+            filter: Some(filter),
             _ph_r: PhantomData,
             _ph_k: PhantomData,
         })
@@ -653,11 +670,24 @@ impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator for ACLLis
     type Error = Error;
 
     fn next(&mut self) -> Result<Option<Self::Item>> {
-        while let Some(item) = self.inner.next()? {
-            if item.is_match( self.sid, &self.filter ) {
-                continue;
+        if let Some(sid) = self.sid {
+            while let Some(item) = self.inner.next()? {
+                if item.is_match( sid, &self.filter ) {
+                    continue;
+                }
+                return Ok(Some(item));
             }
-            return Ok(Some(item));
+        } else if let Some(filter) = &self.filter {
+            while let Some(item) = self.inner.next()? {
+                if item.is_match_any_sid( filter ) {
+                    continue;
+                }
+                return Ok(Some(item));
+            }
+        } else {
+            if let Some(item) = self.inner.next()? {
+                return Ok(Some(item));
+            }
         }
 
         Ok(None)
@@ -697,7 +727,7 @@ pub struct ACEWithInheritedFromIterator<'r, K: ACLKind> {
 pub struct ACEWithInheritedFrom<'r, K: ACLKind> {
     pub ace: ACE<'r, K>,
     pub generation_gap: i32,
-    pub ancestor_name: String,
+    pub ancestor_name: Option<String>,
 }
 
 impl<'r, K: ACLKind> ACEWithInheritedFromIterator<'r, K> {

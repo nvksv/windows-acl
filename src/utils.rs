@@ -4,12 +4,7 @@
 
 use core::fmt;
 use std::{
-    ffi::{c_void, OsStr},
-    iter::once,
-    mem,
-    ops::Drop,
-    os::windows::ffi::OsStrExt,
-    marker::PhantomData,
+    ffi::{c_void, OsStr}, fmt::Debug, iter::once, marker::PhantomData, mem, ops::Drop, os::windows::ffi::OsStrExt
 };
 use windows::{
     core::{
@@ -456,4 +451,14 @@ impl fmt::Debug for DebugIdent {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[repr(transparent)]
+pub struct DebugUnpretty<T: Debug>( pub T );
+
+impl<T: Debug> fmt::Debug for DebugUnpretty<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", &self.0))
+    }
+}
+
 

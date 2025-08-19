@@ -21,7 +21,7 @@ use windows::{
 };
 
 use crate::{
-    utils::{acl_entry_size, DebugIdent},
+    utils::{acl_entry_size, DebugIdent, DebugUnpretty},
     types::*,
     sid::{SIDRef, VSID, IntoVSID},
     acl_kind::{ACLKind, DACL, SACL, IsACLKind},
@@ -56,26 +56,12 @@ impl<'r, K: ACLKind> fmt::Debug for ACE<'r, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ACE")
             .field( "entry_type", &self.entry_type )
-            .field( "flags", &DebugAceFlags(self.flags) )
-            .field( "access_mask", &DebugFileAccessRights(self.access_mask) )
             .field( "sid", &self.sid )
+            .field( "flags", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags)) )
+            .field( "access_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask)) )
             .finish()
     }
 }
-
-// impl<'r, K: ACLKind> ACE<'r, K> {
-//     /// Returns an `ACLEntry` object with default values.
-//     #[inline]
-//     pub fn new() -> Self {
-//         Self {
-//             entry_type: AceType::Unknown,
-//             flags: ACE_FLAGS(0),
-//             access_mask: ACCESS_MASK::default(),
-//             sid: VSID::empty(),
-//             _ph: PhantomData,
-//         }
-//     }
-// }
 
 impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     #[inline]
@@ -92,7 +78,7 @@ impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     #[inline]
     pub fn new_deny<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
-            entry_type: AceType::SystemAudit,
+            entry_type: AceType::AccessDeny,
             sid: sid.into_vsid(),
             flags: flags.into_ace_flags(),
             access_mask: access_mask.into_access_mask(),
@@ -126,24 +112,25 @@ impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
 }
 
 impl<'r, K: ACLKind> ACE<'r, K> {
-    pub fn is_match_any_sid<'s>( &self, mask: &ACEMask ) -> bool {
-        if mask.never {
+    pub fn is_match_any_sid<'s>( &self, filter: &ACEFilter ) -> bool {
+        if filter.never {
             return false;
         }
-        if let Some(entry_type) = mask.entry_type {
+
+        if let Some(entry_type) = filter.entry_type {
             if self.entry_type != entry_type {
                 return false;
             }
         }
 
-        if mask.flags_mask != ACE_FLAGS(0) {
-            if self.flags & mask.flags_mask != mask.flags {
+        if filter.flags_mask != ACE_FLAGS(0) {
+            if self.flags & filter.flags_mask != filter.flags {
                 return false;
             }
         }
 
-        if mask.access_mask_mask != ACCESS_MASK(0) {
-            if self.access_mask & mask.access_mask != mask.access_mask_mask {
+        if filter.access_mask_mask != ACCESS_MASK(0) {
+            if self.access_mask & filter.access_mask != filter.access_mask_mask {
                 return false;
             }
         }
@@ -151,13 +138,55 @@ impl<'r, K: ACLKind> ACE<'r, K> {
         true
     }
 
-    pub fn is_match<'s>( &self, sid: SIDRef<'s>, mask: &Option<ACEMask> ) -> bool {
+    pub fn is_match<'s>( &self, sid: SIDRef<'s>, filter: &Option<ACEFilter> ) -> bool {
         if !self.sid.eq_to_ref(sid) {
             return false;
         }
 
-        if let Some(mask) = mask {
+        if let Some(mask) = filter {
             if !self.is_match_any_sid(mask) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    pub fn is_eq<'o>( &self, other: &ACE<'o, K>, mask: &Option<ACEMask> ) -> bool {
+        if self.sid != other.sid {
+            return false;
+        }
+
+        if let Some(mask) = mask {
+            if mask.never {
+                return false;
+            }
+
+            if mask.entry_type {
+                if self.entry_type != other.entry_type {
+                    return false;
+                }
+            }
+
+            if mask.flags != ACE_FLAGS(0) {
+                if self.flags & other.flags != other.flags & other.flags {
+                    return false;
+                }
+            }
+
+            if mask.access_mask != ACCESS_MASK(0) {
+                if self.access_mask & mask.access_mask != other.access_mask & mask.access_mask {
+                    return false;
+                }
+            }
+        } else {
+            if self.entry_type != other.entry_type {
+                return false;
+            }
+            if self.flags != other.flags {
+                return false;
+            }
+            if self.access_mask != other.access_mask {
                 return false;
             }
         }
@@ -225,7 +254,7 @@ impl<'r, K: ACLKind> hash::Hash for ACE<'r, K> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ACEMask {
+pub struct ACEFilter {
     pub never: bool, 
 
     /// The entry's type
@@ -238,7 +267,7 @@ pub struct ACEMask {
     pub access_mask_mask: ACCESS_MASK,
 }
 
-impl ACEMask {
+impl ACEFilter {
     /// Returns an `ACLEntry` object with default values.
     #[inline]
     pub fn new() -> Self {
@@ -346,11 +375,143 @@ impl ACEMask {
         self.flags &= !INHERITED_ACE;
         
         if bit {
-            self.flags_mask |= INHERITED_ACE;
+            self.flags |= INHERITED_ACE;
         }
 
         self.flags_mask |= INHERITED_ACE;
 
+        self
+    }
+
+}
+
+impl fmt::Debug for ACEFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ACEFilter")
+            .field( "never", &self.never )
+            .field( "entry_type", &self.entry_type )
+            .field( "flags", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags)) )
+            .field( "flags_mask", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags_mask)) )
+            .field( "access_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask)) )
+            .field( "access_mask_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask_mask)) )
+            .finish()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ 
+pub trait IntoOptionalACEFilter {
+    fn into_optional_mask( self ) -> Option<ACEFilter>;
+}
+
+impl IntoOptionalACEFilter for Option<ACEFilter> {
+    #[inline]
+    fn into_optional_mask( self ) -> Option<ACEFilter> {
+        self
+    }
+}
+
+impl IntoOptionalACEFilter for ACEFilter {
+    #[inline]
+    fn into_optional_mask( self ) -> Option<ACEFilter> {
+        Some(self)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ACEMask {
+    pub never: bool, 
+    pub entry_type: bool,
+    pub flags: ACE_FLAGS,
+    pub access_mask: ACCESS_MASK,
+}
+
+impl ACEMask {
+    /// Returns an `ACLEntry` object with default values.
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            never: false,
+            entry_type: false,
+            flags: ACE_FLAGS(0),
+            access_mask: ACCESS_MASK(0),
+        }
+    }
+
+    #[inline]
+    pub fn never() -> Self {
+        Self {
+            never: true,
+            entry_type: false,
+            flags: ACE_FLAGS(0),
+            access_mask: ACCESS_MASK(0),
+        }
+    }
+
+    //
+
+    #[inline]
+    pub fn set_never( mut self ) -> Self {
+        self.never = true;
+        self
+    }
+
+    #[inline]
+    pub fn unset_never( mut self ) -> Self {
+        self.never = false;
+        self
+    }
+
+    //
+
+    #[inline]
+    pub fn set_entry_type( mut self ) -> Self {
+        self.entry_type = true;
+        self
+    }
+
+    #[inline]
+    pub fn unset_entry_type( mut self ) -> Self {
+        self.entry_type = false;
+        self
+    }
+
+    //
+
+    #[inline]
+    pub fn set_flags( mut self, flags: impl IntoAceFlags ) -> Self {
+        self.flags = flags.into_ace_flags();
+        self
+    }
+
+    #[inline]
+    pub fn unset_flags( mut self ) -> Self {
+        self.flags = ACE_FLAGS(0);
+        self
+    }
+
+    //
+
+    #[inline]
+    pub fn set_access_mask( mut self, access_mask: impl IntoAccessMask ) -> Self {
+        self.access_mask = access_mask.into_access_mask();
+        self
+    }
+
+
+    #[inline]
+    pub fn unset_access_mask( mut self ) -> Self {
+        self.access_mask = ACCESS_MASK(0);
+        self
+    }
+
+    //
+
+    #[inline]
+    pub fn set_inherited_flag( mut self ) -> Self {
+        self.flags |= INHERITED_ACE;
         self
     }
 
@@ -361,10 +522,8 @@ impl fmt::Debug for ACEMask {
         f.debug_struct("ACEMask")
             .field( "never", &self.never )
             .field( "entry_type", &self.entry_type )
-            .field( "flags", &DebugAceFlags(self.flags) )
-            .field( "flags_mask", &DebugAceFlags(self.flags_mask) )
-            .field( "access_mask", &DebugFileAccessRights(self.access_mask) )
-            .field( "access_mask_mask", &DebugFileAccessRights(self.access_mask_mask) )
+            .field( "flags", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags)) )
+            .field( "access_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask)) )
             .finish()
     }
 }
