@@ -674,7 +674,7 @@ fn my_test() {
             OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
             FILE_ALL_ACCESS,
             None
-        ).unwrap()
+        )?
         .remove_any_sid(
             ACEFilter::new().set_inherited_flag(true)
         )
