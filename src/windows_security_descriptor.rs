@@ -17,7 +17,8 @@ use windows::{
         Security::{
             Authorization::{
                 SE_OBJECT_TYPE, GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, 
-                SetSecurityInfo,
+                SetSecurityInfo, INHERITED_FROMW, GetInheritanceSourceW, SE_FILE_OBJECT,
+                FreeInheritedFromArray,
             },
             DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
             OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
@@ -25,7 +26,7 @@ use windows::{
             PROTECTED_SACL_SECURITY_INFORMATION, UNPROTECTED_SACL_SECURITY_INFORMATION,
             ACL as _ACL, OBJECT_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorSacl,
             GetSecurityDescriptorOwner, GetSecurityDescriptorGroup, GetSecurityDescriptorControl,
-            SE_DACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, SE_SACL_PROTECTED,
+            SE_DACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, SE_SACL_PROTECTED, GENERIC_MAPPING,
         },
     },
 };
@@ -601,11 +602,131 @@ impl WindowsSecurityDescriptor {
         self.read_group_from_descriptor()
     }
 
+    pub fn get_inheritance_source<'r, K: ACLKind>( 
+        &self, 
+        source: &SDSource,
+        object_type: SE_OBJECT_TYPE,
+        pacl: *const _ACL,
+    ) -> Result<WindowsInheritedFrom> {
+        if pacl.is_null() {
+            return Err(Error::empty());
+        }
+        let SDSource::Path(path) = source else {
+            return Err(Error::empty());
+        };
+
+        let generic_mapping = GENERIC_MAPPING {
+            GenericRead: 0,
+            GenericWrite: 0,
+            GenericExecute: 0,
+            GenericAll: 0,
+        };
+
+        let is_container = object_type == SE_FILE_OBJECT;
+
+        let mut wPath: Vec<u16> = str_to_wstr(path);
+        let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+
+        let ace_count = unsafe { (*pacl).AceCount };
+        let buffer_size = (ace_count as usize) * size_of::<INHERITED_FROMW>();
+        let mut buffer = [0_u8].repeat(buffer_size);
+
+        let pInheritArray = buffer.as_mut_ptr() as *mut INHERITED_FROMW;
+
+        let ret = unsafe {
+            GetInheritanceSourceW(
+                wPath,
+                object_type, 
+                K::get_security_information_bit(),
+                is_container,
+                None,
+                pacl,
+                None, 
+                &generic_mapping,
+                pInheritArray
+            )
+        };
+
+        if ret != ERROR_SUCCESS {
+            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
+            return Err(err);
+        }
+
+        Ok(WindowsInheritedFrom {
+            ace_count,
+            buffer,
+        })
+    }
+
 }
 
 impl Drop for WindowsSecurityDescriptor {
     fn drop(&mut self) {
         self.free_descriptor();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct WindowsInheritedFrom {
+    ace_count: u16,
+    buffer: Vec<u8>,
+}
+
+impl WindowsInheritedFrom {
+    pub fn count( &self ) -> u16 {
+        self.ace_count
+    }
+
+    pub fn get( &self, idx: u16 ) -> Option<&INHERITED_FROMW> {
+        if idx >= self.ace_count {
+            return None;
+        }
+
+        let pInheritArray = self.buffer.as_ptr() as *const INHERITED_FROMW;
+        let pItem = unsafe { &* pInheritArray.offset(idx as isize) };
+        Some(pItem)
+    }
+
+    pub fn generation_gap( item: &INHERITED_FROMW ) -> i32 {
+        item.GenerationGap
+    }
+
+    pub fn ancestor_name( item: &INHERITED_FROMW ) -> Result<String> {
+        unsafe { item.AncestorName.to_string() }
+            .map_err(|_| Error::empty())
+    }
+
+    pub fn free( &mut self ) -> Result<()> {
+        if self.buffer.is_empty() && self.ace_count == 0 {
+            return Ok(());
+        }
+
+        let pInheritArray = self.buffer.as_ptr() as *const INHERITED_FROMW;
+        let pInheritArray = unsafe { core::slice::from_raw_parts( pInheritArray, self.ace_count as usize ) };
+        
+        let ret = unsafe {
+            FreeInheritedFromArray(
+                pInheritArray,
+                None
+            )
+        };
+
+        if ret != ERROR_SUCCESS {
+            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
+            return Err(err);
+        };
+
+        self.ace_count = 0;
+        self.buffer.truncate(0);
+
+        Ok(())
+    }
+}
+
+impl Drop for WindowsInheritedFrom {
+    fn drop(&mut self) {
+        let _ = self.free();
     }
 }
 

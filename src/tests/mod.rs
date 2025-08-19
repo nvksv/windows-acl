@@ -120,8 +120,8 @@ fn sidstring_unit_test() {
 }
 
 fn acl_entry_exists<'r, 'e, K: ACLKind>(entries: &Vec<ACE<'r, K>>, expected: &ACE<'e, K>) -> Option<usize> {
-    println!("entries = {:?}", entries);
-    println!("expected = {:?}", expected);
+    println!("entries = {:#?}", entries);
+    println!("expected = {:#?}", expected);
 
     for i in 0..(entries.len()) {
         let entry = &entries[i];
@@ -171,6 +171,7 @@ fn query_dacl_unit_test() {
     let path = path_obj.to_str().unwrap();
 
     let sd = SD::from_file_path(path, false).unwrap();
+    println!("sd = {:#?}", &sd);
 
     let entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);

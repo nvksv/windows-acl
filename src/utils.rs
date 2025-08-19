@@ -446,6 +446,7 @@ pub fn write_sacl_ace<'r>( pacl: *mut _ACL, entry: &ACE<'r, SACL> ) -> Result<()
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#[repr(transparent)]
 pub struct DebugIdent( pub &'static str );
 
 impl fmt::Debug for DebugIdent {

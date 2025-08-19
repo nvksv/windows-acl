@@ -13,7 +13,7 @@ mod utils;
 
 pub use acl_kind::{ACLKind, DACL, SACL};
 pub use security_descriptor::{SD};
-pub use ace::{ACE, ACEMask, IntoAceFlags};
+pub use ace::{ACE, ACEMask};
 pub use acl::{ACL, ACLEntryIterator, ACLVecList};
 pub use sid::{SID, SIDRef, VSID};
 pub use types::{AceType, ACCESS_MASK, IntoAccessMask};

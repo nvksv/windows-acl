@@ -53,11 +53,17 @@ use windows::{
 use fallible_iterator::FallibleIterator;
 use crate::{
     acl_kind::{ACLKind, DACL, SACL},
-    ace::ACE, acl::{
-        ACL, AceEntryIterator, ACLVecList
-    }, windows_security_descriptor::{
+    ace::ACE, 
+    acl::{
+        ACL, AceEntryIterator, ACLVecList, ACLEntryIterator, ACEWithInheritedFromIterator,
+    }, 
+    windows_security_descriptor::{
         SDSource, WindowsSecurityDescriptor,
-    }, sid::{SIDRef, VSID}, types::*, utils::{acl_size, as_ppvoid_mut, as_pvoid_mut, parse_dacl_ace, parse_sacl_ace, vec_as_pacl_mut, write_dacl_ace, write_sacl_ace, str_to_wstr}, ACLEntryIterator
+    }, 
+    sid::{SIDRef, VSID}, 
+    types::*, 
+    utils::{acl_size, as_ppvoid_mut, as_pvoid_mut, parse_dacl_ace, parse_sacl_ace, vec_as_pacl_mut, write_dacl_ace, write_sacl_ace, str_to_wstr}, 
+    
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -315,6 +321,23 @@ impl SD {
         self.inner_set_dacl(new_dacl)
     }
 
+    pub fn iter_dacl_with_inheritance_source( &self ) -> Result<ACEWithInheritedFromIterator<'_, DACL>> {
+        let dacl = self.descriptor.dacl().unwrap_or(null());
+
+        let inherited_from = self.descriptor.get_inheritance_source::<DACL>(
+            &self.source,
+            self.object_type.into(),
+            dacl,
+        )?;
+
+        let iter = ACEWithInheritedFromIterator::new( 
+            dacl, 
+            inherited_from
+        );
+
+        Ok(iter)
+    }
+
     //
 
     pub fn dacl_is_protected( &self ) -> bool {
@@ -367,6 +390,23 @@ impl SD {
         self.inner_set_sacl(new_sacl)
     }
 
+    pub fn iter_sacl_with_inheritance_source( &self ) -> Result<ACEWithInheritedFromIterator<'_, SACL>> {
+        let sacl = self.descriptor.sacl().unwrap_or(null());
+
+        let inherited_from = self.descriptor.get_inheritance_source::<SACL>(
+            &self.source,
+            self.object_type.into(),
+            sacl,
+        )?;
+
+        let iter = ACEWithInheritedFromIterator::new( 
+            sacl, 
+            inherited_from
+        );
+
+        Ok(iter)
+    }
+
     //
 
     pub fn sacl_is_protected( &self ) -> bool {
@@ -414,47 +454,6 @@ impl SD {
 
     //
 
-    fn get_inheritance_source<'r, K: ACLKind>( &self, acl: ACL<'r, K> ) -> Result<()> {
-        let SDSource::Path(path) = &self.source else {
-            return Err(Error::empty());
-        };
-
-        let generic_mapping = GENERIC_MAPPING {
-            GenericRead: 0,
-            GenericWrite: 0,
-            GenericExecute: 0,
-            GenericAll: 0,
-        };
-
-        let mut wPath: Vec<u16> = str_to_wstr(path);
-        let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
-
-        let buffer_size = (acl.ace_count() as usize) * size_of::<INHERITED_FROMW>();
-        let mut buffer = [0u8].repeat(buffer_size);
-
-        let pInheritArray = buffer.as_mut_ptr() as *mut INHERITED_FROMW;
-
-        let ret = unsafe {
-            GetInheritanceSourceW(
-                wPath,
-                self.object_type.into(), 
-                K::get_security_information_bit(),
-                self.object_type == ObjectType::FileObject,
-                None,
-                acl.pacl(),
-                None, 
-                &generic_mapping,
-                pInheritArray
-            )
-        };
-
-        if ret != ERROR_SUCCESS {
-            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
-            return Err(err);
-        }
-
-        Ok(())
-    }
 
 }
 

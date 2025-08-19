@@ -17,9 +17,10 @@ use windows::{
             STATUS_ALLOTTED_SPACE_EXCEEDED, 
         },
         Security::{
+            Authorization::INHERITED_FROMW,
             GetAce, InitializeAcl, IsValidAcl,
             ACL as _ACL, ACL_REVISION_DS, ACE_HEADER, ACE_FLAGS,
-            FindFirstFreeAce,
+            FindFirstFreeAce, 
         },
     },
 };
@@ -27,9 +28,11 @@ use fallible_iterator::FallibleIterator;
 
 use crate::{
     acl_kind::{ACLKind, IsACLKind, DACL, SACL},
-    ace::{ACE, ACEMask, AVERAGE_ACE_SIZE, MAX_ACL_SIZE, IntoOptionalACEMask, IntoAceFlags}, 
-    sid::{SIDRef, VSID, IntoVSID}, types::*, 
-    utils::{as_ppvoid_mut, vec_as_pacl_mut}
+    ace::{ACE, ACEMask, AVERAGE_ACE_SIZE, MAX_ACL_SIZE, IntoOptionalACEMask}, 
+    sid::{SIDRef, VSID, IntoVSID}, 
+    types::*, 
+    utils::{as_ppvoid_mut, vec_as_pacl_mut},
+    windows_security_descriptor::WindowsInheritedFrom,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -334,7 +337,7 @@ pub struct AceHdrIterator<'r> {
 }
 
 impl<'r> AceHdrIterator<'r> {
-    pub fn new( acl: *const _ACL ) -> Self {
+    fn new( acl: *const _ACL ) -> Self {
         if acl.is_null() {
             return Self {
                 acl,
@@ -349,6 +352,15 @@ impl<'r> AceHdrIterator<'r> {
             idx: 0,
             ace_count: unsafe { (*acl).AceCount },
             _ph: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn current_item_idx( &self ) -> Option<u16> {
+        if self.idx > 0 {
+            Some(self.idx - 1)
+        } else {
+            None
         }
     }
 }
@@ -398,11 +410,16 @@ pub struct AceEntryHdrIterator<'r, K: ACLKind> {
 }
 
 impl<'r, K: ACLKind> AceEntryHdrIterator<'r, K> {
-    pub fn new( acl: *const _ACL ) -> Self {
+    fn new( acl: *const _ACL ) -> Self {
         Self {
             inner: AceHdrIterator::new(acl),
             _ph: PhantomData,
         }
+    }
+
+    #[inline]
+    fn current_item_idx( &self ) -> Option<u16> {
+        self.inner.current_item_idx()
     }
 }
 
@@ -437,11 +454,16 @@ pub struct AceEntryIterator<'r, K: ACLKind> {
 }
 
 impl<'r, K: ACLKind> AceEntryIterator<'r, K> {
-    pub fn new( acl: *const _ACL ) -> Self {
+    fn new( acl: *const _ACL ) -> Self {
         Self {
             inner: AceHdrIterator::new(acl),
             _ph: PhantomData,
         }
+    }
+
+    #[inline]
+    fn current_item_idx( &self ) -> Option<u16> {
+        self.inner.current_item_idx()
     }
 }
 
@@ -661,5 +683,50 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FromACLEntryIterator<'r, I, K> 
         }
         
         Ok(result)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct ACEWithInheritedFromIterator<'r, K: ACLKind> {
+    inner: AceEntryIterator<'r, K>,
+    inherited_from: WindowsInheritedFrom,    
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ACEWithInheritedFrom<'r, K: ACLKind> {
+    pub ace: ACE<'r, K>,
+    pub generation_gap: i32,
+    pub ancestor_name: String,
+}
+
+impl<'r, K: ACLKind> ACEWithInheritedFromIterator<'r, K> {
+    pub(crate) fn new( acl: *const _ACL, inherited_from: WindowsInheritedFrom ) -> Self {
+        Self {
+            inner: AceEntryIterator::new(acl),
+            inherited_from,
+        }
+    }
+}
+
+impl<'r, K: ACLKind> FallibleIterator for ACEWithInheritedFromIterator<'r, K> {
+    type Item = ACEWithInheritedFrom<'r, K>;
+    type Error = Error;
+
+    fn next(&mut self) -> Result<Option<Self::Item>> {
+        while let Some(ace) = self.inner.next()? {
+            let idx = self.inner.current_item_idx().ok_or_else(|| Error::empty())?;
+            let if_item = self.inherited_from.get(idx).ok_or_else(|| Error::empty())?;
+
+            let item = ACEWithInheritedFrom {
+                ace,
+                generation_gap: WindowsInheritedFrom::generation_gap(if_item),
+                ancestor_name: WindowsInheritedFrom::ancestor_name(if_item)?,
+            };
+
+            return Ok(Some(item));
+        }
+
+        Ok(None)
     }
 }

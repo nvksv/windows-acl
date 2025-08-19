@@ -54,7 +54,7 @@ pub struct ACE<'r, K: ACLKind> {
 
 impl<'r, K: ACLKind> fmt::Debug for ACE<'r, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ACLEntry")
+        f.debug_struct("ACE")
             .field( "entry_type", &self.entry_type )
             .field( "flags", &DebugAceFlags(self.flags) )
             .field( "access_mask", &DebugFileAccessRights(self.access_mask) )
@@ -358,7 +358,7 @@ impl ACEMask {
 
 impl fmt::Debug for ACEMask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ACLEntryMask")
+        f.debug_struct("ACEMask")
             .field( "never", &self.never )
             .field( "entry_type", &self.entry_type )
             .field( "flags", &DebugAceFlags(self.flags) )
@@ -391,54 +391,3 @@ impl IntoOptionalACEMask for ACEMask {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub struct DebugAceFlags( ACE_FLAGS );
-
-impl fmt::Debug for DebugAceFlags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = f.debug_tuple("AceFlags");
-
-        if self.0.contains(OBJECT_INHERIT_ACE) {
-            f.field(&DebugIdent("OBJECT_INHERIT_ACE"));
-        }
-        if self.0.contains(CONTAINER_INHERIT_ACE) {
-            f.field(&DebugIdent("CONTAINER_INHERIT_ACE"));
-        }
-        if self.0.contains(NO_PROPAGATE_INHERIT_ACE) {
-            f.field(&DebugIdent("NO_PROPAGATE_INHERIT_ACE"));
-        }
-        if self.0.contains(INHERIT_ONLY_ACE) {
-            f.field(&DebugIdent("INHERIT_ONLY_ACE"));
-        }
-        if self.0.contains(INHERITED_ACE) {
-            f.field(&DebugIdent("INHERITED_ACE"));
-        }
-        if self.0.contains(SUCCESSFUL_ACCESS_ACE_FLAG) {
-            f.field(&DebugIdent("SUCCESSFUL_ACCESS_ACE_FLAG"));
-        }
-        if self.0.contains(FAILED_ACCESS_ACE_FLAG) {
-            f.field(&DebugIdent("FAILED_ACCESS_ACE_FLAG"));
-        }
-
-        f.finish()
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-pub trait IntoAceFlags {
-    fn into_ace_flags( self ) -> ACE_FLAGS;
-}
-
-impl IntoAceFlags for ACE_FLAGS {
-    #[inline]
-    fn into_ace_flags( self ) -> ACE_FLAGS {
-        self
-    }
-}
-
-impl IntoAceFlags for u32 {
-    #[inline]
-    fn into_ace_flags( self ) -> ACE_FLAGS {
-        ACE_FLAGS(self)
-    }
-}
