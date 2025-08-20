@@ -27,5 +27,7 @@ pub mod windows {
     pub use crate::windows_security_descriptor::{WindowsSecurityDescriptor};
 }
 
+pub use ::windows::core::Error;
+
 // #[cfg(test)]
 mod tests;
