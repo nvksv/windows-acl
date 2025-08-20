@@ -12,7 +12,7 @@ mod security_descriptor;
 mod utils;
 
 pub use acl_kind::{ACLKind, DACL, SACL};
-pub use security_descriptor::{SD};
+pub use security_descriptor::{SecurityDescriptor};
 pub use ace::{ACE, ACEFilter, ACEMask, IntoOptionalACEFilter, IntoOptionalACEMask};
 pub use acl::{ACL, ACLEntryIterator, ACLVecList};
 pub use sid::{SID, SIDRef, VSID};
@@ -27,7 +27,9 @@ pub mod windows {
     pub use crate::windows_security_descriptor::{WindowsSecurityDescriptor};
 }
 
-pub use ::windows::core::Error;
+/// Reexport
+pub use ::windows::core::{Result, Error};
+pub use ::fallible_iterator;
 
 // #[cfg(test)]
 mod tests;

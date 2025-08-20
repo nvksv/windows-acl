@@ -62,20 +62,20 @@ use crate::{
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// `SD` represents the access control list (discretionary or oth discretionary/system) for a named object
-pub struct SD {
+pub struct SecurityDescriptor {
     descriptor: WindowsSecurityDescriptor,
     source: SDSource,
     object_type: ObjectType,
     include_sacl: bool,
 }
 
-impl SD {
-    /// Creates an `SD` object from a specified object handle.
+impl SecurityDescriptor {
+    /// Creates an `SecurityDescriptor` object from a specified object handle.
     ///
     /// # Arguments
     /// * `handle` - An object handle.
     /// * `object_type` - The named object path's type. See [SE_OBJECT_TYPE](https://docs.microsoft.com/en-us/windows/desktop/api/accctrl/ne-accctrl-_se_object_type).
-    /// * `include_sacl` - A boolean specifying whether the returned `SD` object will be able to enumerate and set
+    /// * `include_sacl` - A boolean specifying whether the returned `SecurityDescriptor` object will be able to enumerate and set
     ///                System ACL entries.
     ///
     /// # Remarks
@@ -454,7 +454,7 @@ impl SD {
 
 }
 
-impl fmt::Debug for SD {
+impl fmt::Debug for SecurityDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let dacl_entries = self.dacl().all().unwrap_or_default();
         let sacl_entries = self.sacl().all().unwrap_or_default();
