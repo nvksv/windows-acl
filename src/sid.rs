@@ -581,6 +581,10 @@ impl SID {
         self.as_ref().to_string()
     }
 
+    pub fn to_account_name_or_sid( &self ) -> Result<String> {
+        self.as_ref().to_account_name_or_sid()
+    }
+
     pub fn get_domain_of( &self ) -> Result<Self> {
         self.as_ref().get_domain_of()
     }
@@ -709,6 +713,20 @@ impl<'r> VSID<'r> {
             },
             Self::Value(v) => {
                 v.to_string()
+            }
+        }
+    }
+
+    pub fn to_account_name_or_sid(&self) -> Result<String> {
+        match self {
+            Self::None => {
+                Ok(String::new())
+            },
+            Self::Ptr(p) => {
+                p.to_account_name_or_sid()
+            },
+            Self::Value(v) => {
+                v.to_account_name_or_sid()
             }
         }
     }
