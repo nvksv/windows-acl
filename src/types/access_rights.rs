@@ -406,9 +406,9 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
     const DEBUG_NAME: &'static str = "ACCESS_MASK";
     const DISPLAY_MODE: AccessMaskDebugMode = AccessMaskDebugMode::PlainList;
 
-    fn to_generic( access_mask: ACCESS_MASK, is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
-        Some(access_mask_to_file_rights_generic_flags( access_mask, is_container.unwrap_or(false) ))
-    }
+    // fn to_generic( access_mask: ACCESS_MASK, is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
+    //     Some(access_mask_to_file_rights_generic_flags( access_mask, is_container.unwrap_or(false) ))
+    // }
 
     fn generic_full_access() -> Option<DebugIdent> {
         Some(DebugIdent("GENERIC_ALL"))
@@ -641,9 +641,9 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
     }
 
     // SYNCHRONIZE
-    fn bit_0010_0000() -> Option<DebugIdent> {
-        Some(DebugIdent("S"))
-    }
+    // fn bit_0010_0000() -> Option<DebugIdent> {
+    //     Some(DebugIdent("S"))
+    // }
 
     // SPECIFIC_RIGHTS_ALL
     fn bits_0000_FFFF() -> Option<DebugIdent> {
