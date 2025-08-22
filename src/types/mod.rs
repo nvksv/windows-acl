@@ -25,7 +25,7 @@ use windows::{
 
 use crate::utils::DebugIdent;
 
-pub use access_rights::{ACCESS_MASK, IntoAccessMask, DebugFileAccessRights, AccessMaskIdents, FileAccessRightsFullIdents, FileAccessRightsShortIdents};
+pub use access_rights::{ACCESS_MASK, IntoAccessMask, FileAccessRightsRepresenter, AccessMaskIdents, FileAccessRightsFullIdents, FileAccessRightsShortIdents};
 pub use ace_flags::{IntoAceFlags, DebugAceFlags, AceFlagsIdents, AceFlagsFullIdents, AceFlagsShortIdents};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

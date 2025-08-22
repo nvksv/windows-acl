@@ -58,7 +58,7 @@ impl<'r, K: ACLKind> fmt::Debug for ACE<'r, K> {
             .field( "entry_type", &self.entry_type )
             .field( "sid", &self.sid )
             .field( "flags", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags)) )
-            .field( "access_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask)) )
+            .field( "access_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask, None)) )
             .finish()
     }
 }
@@ -392,8 +392,8 @@ impl fmt::Debug for ACEFilter {
             .field( "entry_type", &self.entry_type )
             .field( "flags", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags)) )
             .field( "flags_mask", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags_mask)) )
-            .field( "access_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask)) )
-            .field( "access_mask_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask_mask)) )
+            .field( "access_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask, None)) )
+            .field( "access_mask_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask_mask, None)) )
             .finish()
     }
 }
@@ -523,7 +523,7 @@ impl fmt::Debug for ACEMask {
             .field( "never", &self.never )
             .field( "entry_type", &self.entry_type )
             .field( "flags", &DebugUnpretty(DebugAceFlags::<AceFlagsShortIdents>::new(self.flags)) )
-            .field( "access_mask", &DebugUnpretty(DebugFileAccessRights::<FileAccessRightsShortIdents>::new(self.access_mask)) )
+            .field( "access_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask, None)) )
             .finish()
     }
 }

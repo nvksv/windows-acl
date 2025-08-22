@@ -120,8 +120,14 @@ pub enum AccessMaskDebugMode {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub trait AccessMaskIdents {
-    const MODE: AccessMaskDebugMode = AccessMaskDebugMode::Tuple;
-    const NAME: &'static str = "ACCESS_MASK";
+    const DEBUG_MODE: AccessMaskDebugMode;
+    const DEBUG_NAME: &'static str = "";
+    const DISPLAY_MODE: AccessMaskDebugMode;
+    const DISPLAY_NAME: &'static str = "";
+
+    fn to_generic( _access_mask: ACCESS_MASK, _is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
+        None
+    }
 
     fn generic_full_access() -> Option<DebugIdent> {
         None
@@ -147,7 +153,7 @@ pub trait AccessMaskIdents {
         None
     }
 
-    fn generic_special_permissions() -> Option<DebugIdent> {
+    fn generic_special_permissions( _special_permissions: ACCESS_MASK ) -> Option<DebugIdent> {
         None
     }
 
@@ -396,7 +402,9 @@ fn access_mask_to_file_rights_generic_flags( access_mask: ACCESS_MASK, is_direct
 pub struct FileAccessRightsFullIdents {}
 
 impl AccessMaskIdents for FileAccessRightsFullIdents {
-    const MODE: AccessMaskDebugMode = AccessMaskDebugMode::Tuple;
+    const DEBUG_MODE: AccessMaskDebugMode = AccessMaskDebugMode::Tuple;
+    const DEBUG_NAME: &'static str = "ACCESS_MASK";
+    const DISPLAY_MODE: AccessMaskDebugMode = AccessMaskDebugMode::PlainList;
 
     fn generic_full_access() -> Option<DebugIdent> {
         Some(DebugIdent("GENERIC_ALL"))
@@ -422,7 +430,7 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
         Some(DebugIdent("GENERIC_WRITE"))
     }
 
-    fn generic_special_permissions() -> Option<DebugIdent> {
+    fn generic_special_permissions( _special_permissions: ACCESS_MASK ) -> Option<DebugIdent> {
         Some(DebugIdent("GENERIC_SPECIAL_PERMISSIONS"))
     }
 
@@ -520,6 +528,10 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
 pub struct FileAccessRightsShortIdents {}
 
 impl AccessMaskIdents for FileAccessRightsShortIdents {
+    const DEBUG_MODE: AccessMaskDebugMode = AccessMaskDebugMode::Tuple;
+    const DEBUG_NAME: &'static str = "ACCESS_MASK";
+    const DISPLAY_MODE: AccessMaskDebugMode = AccessMaskDebugMode::PlainList;
+
     fn generic_full_access() -> Option<DebugIdent> {
         Some(DebugIdent("ALL"))
     }
@@ -544,7 +556,7 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
         Some(DebugIdent("W"))
     }
 
-    fn generic_special_permissions() -> Option<DebugIdent> {
+    fn generic_special_permissions( _special_permissions: ACCESS_MASK ) -> Option<DebugIdent> {
         Some(DebugIdent("SP"))
     }
 
@@ -660,255 +672,152 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 macro_rules! fmt_tuple {
-    ($mask:expr, $ident:expr) => {
-        
+    ($mask:expr, $ident:ident, $access_mask:expr, $f:ident) => {
+        if let Some(ident) = N::$ident() {
+            if $access_mask.contains(ACCESS_MASK($mask)) {
+                $f.field(&ident);
+            }
+        }
+    };
+    (g: $ident:ident, $f:ident) => {
+        if let Some(ident) = N::$ident() {
+            $f.field(&ident);
+        }
+    };
+    (gsp: $ident:ident, $value:expr, $f:ident) => {
+        if let Some(ident) = N::$ident($value) {
+            $f.field(&ident);
+        }
+    }
+}
+macro_rules! fmt_plain_list {
+    ($mask:expr, $ident:ident, $access_mask:expr, $f:ident, $first_item:ident) => {
+        if let Some(ident) = N::$ident() {
+            if $access_mask.contains(ACCESS_MASK($mask)) {
+                if $first_item {
+                    #[allow(unused_assignments)] {
+                        $first_item = false;
+                    }
+                } else {
+                    write!( $f, ", " )?;
+                }
+
+                write!( $f, "{:?}", ident )?;
+            }
+        }
+    };
+    (g: $ident:ident, $f:ident, $first_item:ident) => {
+        if let Some(ident) = N::$ident() {
+            if $first_item {
+                #[allow(unused_assignments)] {
+                    $first_item = false;
+                }
+            } else {
+                write!( $f, ", " )?;
+            }
+
+            write!( $f, "{:?}", ident )?;
+        }
+    };
+    (gsp: $ident:ident, $value:expr, $f:ident, $first_item:ident) => {
+        if let Some(ident) = N::$ident($value) {
+            if $first_item {
+                #[allow(unused_assignments)] {
+                    $first_item = false;
+                }
+            } else {
+                write!( $f, ", " )?;
+            }
+
+            write!( $f, "{:?}", ident )?;
+        }
     }
 }
 
-#[repr(transparent)]
-pub struct DebugFileAccessRights<N: AccessMaskIdents>{ 
+pub struct FileAccessRightsRepresenter<N: AccessMaskIdents>{ 
     pub access_mask: ACCESS_MASK,
+    pub is_container: Option<bool>,
     pub _ph: PhantomData<N>,
 }
 
-impl<N: AccessMaskIdents> DebugFileAccessRights<N> {
-    pub fn new( access_mask: ACCESS_MASK ) -> Self {
+impl<N: AccessMaskIdents> FileAccessRightsRepresenter<N> {
+    pub fn new( access_mask: ACCESS_MASK, is_container: Option<bool> ) -> Self {
         Self {
             access_mask,
+            is_container,
             _ph: PhantomData, 
         }
     }
 
-    fn fmt_tuple(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = f.debug_tuple(N::NAME);
+    fn fmt_tuple(&self, f: &mut std::fmt::Formatter<'_>, name: &str) -> fmt::Result {
+        let mut f = f.debug_tuple(name);
+        let mut access_mask = self.access_mask;
 
-        if let Some(ident) = N::bit_0000_0001() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0001)) {
-                f.field(&ident);
+        if let Some(generic) = N::to_generic(access_mask, self.is_container) {
+            if generic.full_access {
+                fmt_tuple!(g: generic_full_access, f);
             }
+            if generic.modify {
+                fmt_tuple!(g: generic_modify, f);
+            }
+            if generic.read_and_execute {
+                fmt_tuple!(g: generic_read_and_execute, f);
+            }
+            if generic.list_folder_contents {
+                fmt_tuple!(g: generic_list_folder_contents, f);
+            }
+            if generic.read {
+                fmt_tuple!(g: generic_read, f);
+            }
+            if generic.write {
+                fmt_tuple!(g: generic_write, f);
+            }
+
+            if let Some(special_permissions) = generic.special_permissions {
+                fmt_tuple!(gsp: generic_special_permissions, special_permissions, f);
+            }
+
+            access_mask = generic.other.unwrap_or(ACCESS_MASK(0));
         }
 
-        if let Some(ident) = N::bit_0000_0002() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0002)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0004() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0004)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0008() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0008)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0010() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0010)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0020() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0020)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0040() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0040)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0080() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0080)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = &N::bit_0000_0100() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0100)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = &N::bit_0000_0200() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0200)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0400() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0400)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0800() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0800)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_1000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_1000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_2000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_2000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_4000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_4000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_8000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_8000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0001_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0001_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0002_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0002_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0004_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0004_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0008_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0008_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0010_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0010_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0020_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0020_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0040_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0040_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0080_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0080_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0100_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0100_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if self.access_mask.contains(ACCESS_MASK(0x_0200_0000)) {
-            if let Some(ident) = N::bit_0200_0000() {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0400_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0400_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0800_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0800_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_1000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_1000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_2000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_2000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_4000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_4000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_8000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_8000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0000_FFFF() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_FFFF)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_000F_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_000F_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0012_0089() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0012_0089)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0012_00A0() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0012_00A0)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0012_0116() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0012_0116)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_001F_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_001F_0000)) {
-                f.field(&ident);
-            }
-        }
+        fmt_tuple!(0x_0000_0001, bit_0000_0001, access_mask, f);
+        fmt_tuple!(0x_0000_0002, bit_0000_0002, access_mask, f);
+        fmt_tuple!(0x_0000_0004, bit_0000_0004, access_mask, f);
+        fmt_tuple!(0x_0000_0008, bit_0000_0008, access_mask, f);
+        fmt_tuple!(0x_0000_0010, bit_0000_0010, access_mask, f);
+        fmt_tuple!(0x_0000_0020, bit_0000_0020, access_mask, f);
+        fmt_tuple!(0x_0000_0040, bit_0000_0040, access_mask, f);
+        fmt_tuple!(0x_0000_0080, bit_0000_0080, access_mask, f);
+        fmt_tuple!(0x_0000_0100, bit_0000_0100, access_mask, f);
+        fmt_tuple!(0x_0000_0200, bit_0000_0200, access_mask, f);
+        fmt_tuple!(0x_0000_0400, bit_0000_0400, access_mask, f);
+        fmt_tuple!(0x_0000_0800, bit_0000_0800, access_mask, f);
+        fmt_tuple!(0x_0000_1000, bit_0000_1000, access_mask, f);
+        fmt_tuple!(0x_0000_2000, bit_0000_2000, access_mask, f);
+        fmt_tuple!(0x_0000_4000, bit_0000_4000, access_mask, f);
+        fmt_tuple!(0x_0000_8000, bit_0000_8000, access_mask, f);
+        fmt_tuple!(0x_0001_0000, bit_0001_0000, access_mask, f);
+        fmt_tuple!(0x_0002_0000, bit_0002_0000, access_mask, f);
+        fmt_tuple!(0x_0004_0000, bit_0004_0000, access_mask, f);
+        fmt_tuple!(0x_0008_0000, bit_0008_0000, access_mask, f);
+        fmt_tuple!(0x_0010_0000, bit_0010_0000, access_mask, f);
+        fmt_tuple!(0x_0020_0000, bit_0020_0000, access_mask, f);
+        fmt_tuple!(0x_0040_0000, bit_0040_0000, access_mask, f);
+        fmt_tuple!(0x_0080_0000, bit_0080_0000, access_mask, f);
+        fmt_tuple!(0x_0100_0000, bit_0100_0000, access_mask, f);
+        fmt_tuple!(0x_0200_0000, bit_0200_0000, access_mask, f);
+        fmt_tuple!(0x_0400_0000, bit_0400_0000, access_mask, f);
+        fmt_tuple!(0x_0800_0000, bit_0800_0000, access_mask, f);
+        fmt_tuple!(0x_1000_0000, bit_1000_0000, access_mask, f);
+        fmt_tuple!(0x_2000_0000, bit_2000_0000, access_mask, f);
+        fmt_tuple!(0x_4000_0000, bit_4000_0000, access_mask, f);
+        fmt_tuple!(0x_8000_0000, bit_8000_0000, access_mask, f);
+        fmt_tuple!(0x_0000_FFFF, bits_0000_FFFF, access_mask, f);
+        fmt_tuple!(0x_000F_0000, bits_000F_0000, access_mask, f);
+        fmt_tuple!(0x_0012_0089, bits_0012_0089, access_mask, f);
+        fmt_tuple!(0x_0012_00A0, bits_0012_00A0, access_mask, f);
+        fmt_tuple!(0x_0012_0116, bits_0012_0116, access_mask, f);
+        fmt_tuple!(0x_001F_0000, bits_001F_0000, access_mask, f);
 
         f.finish()
     }
@@ -916,270 +825,91 @@ impl<N: AccessMaskIdents> DebugFileAccessRights<N> {
     fn fmt_plain_list(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let mut first_item = true;
 
-        if let Some(ident) = N::bit_0000_0001() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0001)) {
-                if first_item {
-                    first_item = false;
-                } else {
-                    write!( f, ", " );
-                }
+        let mut access_mask = self.access_mask;
 
-                write!( f, "{:?}", ident );
+        if let Some(generic) = N::to_generic(access_mask, self.is_container) {
+            if generic.full_access {
+                fmt_plain_list!(g: generic_full_access, f, first_item);
             }
+            if generic.modify {
+                fmt_plain_list!(g: generic_modify, f, first_item);
+            }
+            if generic.read_and_execute {
+                fmt_plain_list!(g: generic_read_and_execute, f, first_item);
+            }
+            if generic.list_folder_contents {
+                fmt_plain_list!(g: generic_list_folder_contents, f, first_item);
+            }
+            if generic.read {
+                fmt_plain_list!(g: generic_read, f, first_item);
+            }
+            if generic.write {
+                fmt_plain_list!(g: generic_write, f, first_item);
+            }
+
+            if let Some(special_permissions) = generic.special_permissions {
+                fmt_plain_list!(gsp: generic_special_permissions, special_permissions, f, first_item);
+            }
+
+            access_mask = generic.other.unwrap_or(ACCESS_MASK(0));
         }
 
-        if let Some(ident) = N::bit_0000_0002() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0002)) {
-                if first_item {
-                    first_item = false;
-                } else {
-                    write!( f, ", " );
-                }
+        fmt_plain_list!(0x_0000_0001, bit_0000_0001, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0002, bit_0000_0002, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0004, bit_0000_0004, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0008, bit_0000_0008, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0010, bit_0000_0010, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0020, bit_0000_0020, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0040, bit_0000_0040, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0080, bit_0000_0080, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0100, bit_0000_0100, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0200, bit_0000_0200, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0400, bit_0000_0400, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_0800, bit_0000_0800, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_1000, bit_0000_1000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_2000, bit_0000_2000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_4000, bit_0000_4000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_8000, bit_0000_8000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0001_0000, bit_0001_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0002_0000, bit_0002_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0004_0000, bit_0004_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0008_0000, bit_0008_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0010_0000, bit_0010_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0020_0000, bit_0020_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0040_0000, bit_0040_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0080_0000, bit_0080_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0100_0000, bit_0100_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0200_0000, bit_0200_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0400_0000, bit_0400_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0800_0000, bit_0800_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_1000_0000, bit_1000_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_2000_0000, bit_2000_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_4000_0000, bit_4000_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_8000_0000, bit_8000_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0000_FFFF, bits_0000_FFFF, access_mask, f, first_item);
+        fmt_plain_list!(0x_000F_0000, bits_000F_0000, access_mask, f, first_item);
+        fmt_plain_list!(0x_0012_0089, bits_0012_0089, access_mask, f, first_item);
+        fmt_plain_list!(0x_0012_00A0, bits_0012_00A0, access_mask, f, first_item);
+        fmt_plain_list!(0x_0012_0116, bits_0012_0116, access_mask, f, first_item);
+        fmt_plain_list!(0x_001F_0000, bits_001F_0000, access_mask, f, first_item);
 
-                write!( f, "{:?}", ident );
-            }
-        }
+        Ok(())
+    }
+}
 
-        if let Some(ident) = N::bit_0000_0004() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0004)) {
-                if first_item {
-                    first_item = false;
-                } else {
-                    write!( f, ", " );
-                }
-
-                write!( f, "{:?}", ident );
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0008() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0008)) {
-                if first_item {
-                    first_item = false;
-                } else {
-                    write!( f, ", " );
-                }
-
-                write!( f, "{:?}", ident );
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0010() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0010)) {
-                if first_item {
-                    first_item = false;
-                } else {
-                    write!( f, ", " );
-                }
-
-                write!( f, "{:?}", ident );
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0020() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0020)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0040() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0040)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0080() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0080)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = &N::bit_0000_0100() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0100)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = &N::bit_0000_0200() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0200)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0400() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0400)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_0800() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_0800)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_1000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_1000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_2000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_2000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_4000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_4000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0000_8000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_8000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0001_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0001_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0002_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0002_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0004_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0004_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0008_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0008_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0010_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0010_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0020_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0020_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0040_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0040_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0080_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0080_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0100_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0100_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if self.access_mask.contains(ACCESS_MASK(0x_0200_0000)) {
-            if let Some(ident) = N::bit_0200_0000() {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0400_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0400_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_0800_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0800_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_1000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_1000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_2000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_2000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_4000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_4000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bit_8000_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_8000_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0000_FFFF() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0000_FFFF)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_000F_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_000F_0000)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0012_0089() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0012_0089)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0012_00A0() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0012_00A0)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_0012_0116() {
-            if self.access_mask.contains(ACCESS_MASK(0x_0012_0116)) {
-                f.field(&ident);
-            }
-        }
-
-        if let Some(ident) = N::bits_001F_0000() {
-            if self.access_mask.contains(ACCESS_MASK(0x_001F_0000)) {
-                f.field(&ident);
-            }
+impl<N: AccessMaskIdents> fmt::Debug for FileAccessRightsRepresenter<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        match N::DEBUG_MODE {
+            AccessMaskDebugMode::Tuple => self.fmt_tuple(f, N::DEBUG_NAME),
+            AccessMaskDebugMode::PlainList => self.fmt_plain_list(f),
         }
     }
 }
 
-impl<N: AccessMaskIdents> fmt::Debug for DebugFileAccessRights<N> {
+impl<N: AccessMaskIdents> fmt::Display for FileAccessRightsRepresenter<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        match N::MODE {
-            AccessMaskDebugMode::Tuple => self.fmt_tuple(f),
+        match N::DISPLAY_MODE {
+            AccessMaskDebugMode::Tuple => self.fmt_tuple(f, N::DISPLAY_NAME),
             AccessMaskDebugMode::PlainList => self.fmt_plain_list(f),
         }
     }
