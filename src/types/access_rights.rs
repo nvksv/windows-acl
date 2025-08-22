@@ -371,14 +371,14 @@ fn access_mask_to_file_rights_generic_flags( access_mask: ACCESS_MASK, is_direct
             read = true;
             standard_bits &= !G_READ_AND_EXECUTE;    
         }
+
+        if standard_bits.0 != 0 {
+            special_permissions = Some(standard_bits);
+        }
     }
 
     if is_directory {
         list_folder_contents = read_and_execute;
-    }
-
-    if standard_bits.0 != 0 {
-        special_permissions = Some(standard_bits);
     }
 
     if other_bits.0 != 0 {
@@ -641,9 +641,10 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
     }
 
     // SYNCHRONIZE
-    // fn bit_0010_0000() -> Option<DebugIdent> {
-    //     Some(DebugIdent("S"))
-    // }
+    fn bit_0010_0000() -> Option<DebugIdent> {
+        // Some(DebugIdent("S"))
+        None
+    }
 
     // SPECIFIC_RIGHTS_ALL
     fn bits_0000_FFFF() -> Option<DebugIdent> {
