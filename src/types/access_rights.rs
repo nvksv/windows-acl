@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use core::{ops, default, fmt};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, path::is_separator};
 use windows::{
     core::Result,
     Win32::{
@@ -406,6 +406,10 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
     const DEBUG_NAME: &'static str = "ACCESS_MASK";
     const DISPLAY_MODE: AccessMaskDebugMode = AccessMaskDebugMode::PlainList;
 
+    fn to_generic( access_mask: ACCESS_MASK, is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
+        Some(access_mask_to_file_rights_generic_flags( access_mask, is_container.unwrap_or(false) ))
+    }
+
     fn generic_full_access() -> Option<DebugIdent> {
         Some(DebugIdent("GENERIC_ALL"))
     }
@@ -531,6 +535,10 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
     const DEBUG_MODE: AccessMaskDebugMode = AccessMaskDebugMode::Tuple;
     const DEBUG_NAME: &'static str = "ACCESS_MASK";
     const DISPLAY_MODE: AccessMaskDebugMode = AccessMaskDebugMode::PlainList;
+
+    fn to_generic( access_mask: ACCESS_MASK, is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
+        Some(access_mask_to_file_rights_generic_flags( access_mask, is_container.unwrap_or(false) ))
+    }
 
     fn generic_full_access() -> Option<DebugIdent> {
         Some(DebugIdent("ALL"))
