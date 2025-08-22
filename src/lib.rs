@@ -17,10 +17,13 @@ pub use ace::{ACE, ACEFilter, ACEMask, IntoOptionalACEFilter, IntoOptionalACEMas
 pub use acl::{ACL, ACLEntryIterator, ACLVecList};
 pub use sid::{SID, SIDRef, VSID};
 
-pub use types::{AceType, ACCESS_MASK, IntoAccessMask, FileAccessRightsRepresenter, FileAccessRightsFullIdents, FileAccessRightsShortIdents};
+pub use types::{AceType, ACCESS_MASK, IntoAccessMask};
 
 pub mod helper {
-    pub use crate::utils::{current_user_account_name, DebugIdent, DebugUnpretty};
+    pub use crate::{
+        utils::{current_user_account_name, DebugIdent, DebugUnpretty},
+        types::{FileAccessRightsRepresenter, FileAccessRightsFullIdents, FileAccessRightsShortIdents, AccessMaskIdents, AceFlagsFullIdents, AceFlagsShortIdents},
+    };
 }
 
 pub mod windows {
