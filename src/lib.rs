@@ -22,7 +22,7 @@ pub use types::{AceType, ACCESS_MASK, IntoAccessMask};
 pub mod helper {
     pub use crate::{
         utils::{current_user_account_name, DebugIdent, DebugUnpretty},
-        types::{FileAccessRightsRepresenter, FileAccessRightsFullIdents, FileAccessRightsShortIdents, AccessMaskIdents, AceFlagsFullIdents, AceFlagsShortIdents},
+        types::{FileAccessRightsRepresenter, FileAccessRightsFullIdents, FileAccessRightsShortIdents, AccessMaskIdents, AceFlagsFullIdents, AceFlagsShortIdents, DebugAceFlags},
     };
 }
 
