@@ -38,7 +38,7 @@ pub trait AceFlagsIdents {
     const DISPLAY_MODE: AceFlagsDebugMode;
     const DISPLAY_NAME: &'static str = "";
 
-    fn to_generic(_ace_flags: ACE_FLAGS) -> Option<AceGenericFlags> {
+    fn to_generic( _ace_flags: ACE_FLAGS, _is_container: Option<bool> ) -> Option<AceGenericFlags> {
         None
     }
 
@@ -96,19 +96,23 @@ pub enum AceGenericKind {
 }
 
 pub struct AceGenericFlags {
-    inherited: bool,
-    kind: AceGenericKind,
-    this_container_only: bool,
-    other: ACE_FLAGS,
+    pub inherited: bool,
+    pub kind: AceGenericKind,
+    pub this_container_only: bool,
+    pub other: ACE_FLAGS,
 }
 
-fn ace_flags_to_generic( ace_flags: ACE_FLAGS ) -> Option<AceGenericFlags> {
+fn ace_flags_to_generic( ace_flags: ACE_FLAGS, is_container: bool ) -> Option<AceGenericFlags> {
     let inherited = ace_flags.contains(INHERITED_ACE);
     let this_container_only = ace_flags.contains(NO_PROPAGATE_INHERIT_ACE);
 
     let oi = ace_flags.contains(OBJECT_INHERIT_ACE);
     let ci = ace_flags.contains(CONTAINER_INHERIT_ACE);
     let io = ace_flags.contains(INHERIT_ONLY_ACE);
+
+    if is_container && (this_container_only || oi || ci || io) {
+        return None;
+    }
 
     let kind = match (io, oi, ci) {
         (false, true, true) => AceGenericKind::ThisFolderSubfoldersAndFiles,
@@ -124,7 +128,7 @@ fn ace_flags_to_generic( ace_flags: ACE_FLAGS ) -> Option<AceGenericFlags> {
     };
 
     if this_container_only && kind == AceGenericKind::ThisFolderOnly {
-            return None;
+        return None;
     }
 
     let other = ace_flags & !(INHERITED_ACE | NO_PROPAGATE_INHERIT_ACE| OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE);
@@ -146,9 +150,9 @@ impl AceFlagsIdents for AceFlagsFullIdents {
     const DEBUG_NAME: &'static str = "AceFlags";
     const DISPLAY_MODE: AceFlagsDebugMode = AceFlagsDebugMode::PlainList;
 
-    fn to_generic(ace_flags: ACE_FLAGS) -> Option<AceGenericFlags> {
-        ace_flags_to_generic(ace_flags)
-    }
+    // fn to_generic(ace_flags: ACE_FLAGS, is_container: Option<bool>) -> Option<AceGenericFlags> {
+    //     ace_flags_to_generic(ace_flags, is_container)
+    // }
 
     fn generic_inherited() -> Option<DebugIdent> {
         Some(DebugIdent("INHERITED"))
@@ -208,8 +212,8 @@ impl AceFlagsIdents for AceFlagsShortIdents {
     const DEBUG_NAME: &'static str = "AceFlags";
     const DISPLAY_MODE: AceFlagsDebugMode = AceFlagsDebugMode::PlainList;
 
-    fn to_generic(ace_flags: ACE_FLAGS) -> Option<AceGenericFlags> {
-        ace_flags_to_generic(ace_flags)
+    fn to_generic(ace_flags: ACE_FLAGS, is_container: Option<bool>) -> Option<AceGenericFlags> {
+        ace_flags_to_generic(ace_flags, is_container.unwrap_or(true))
     }
 
     fn generic_inherited() -> Option<DebugIdent> {
@@ -265,7 +269,8 @@ impl AceFlagsIdents for AceFlagsShortIdents {
 
 pub struct AceFlagsRepresenter<N: AceFlagsIdents>{
     pub flags: ACE_FLAGS,
-    _ph: PhantomData<N>,
+    pub is_container: Option<bool>,
+    pub _ph: PhantomData<N>,
 }
 
 macro_rules! fmt_tuple {
@@ -333,9 +338,10 @@ macro_rules! fmt_plain_list {
 
 
 impl<N: AceFlagsIdents> AceFlagsRepresenter<N> {
-    pub fn new( flags: ACE_FLAGS ) -> Self {
+    pub fn new( flags: ACE_FLAGS, is_container: Option<bool> ) -> Self {
         Self { 
             flags,
+            is_container,
             _ph: PhantomData
         }
     }
@@ -345,7 +351,7 @@ impl<N: AceFlagsIdents> AceFlagsRepresenter<N> {
 
         let mut ace_flags = self.flags;
 
-        if let Some(generic) = N::to_generic(ace_flags) {
+        if let Some(generic) = N::to_generic(ace_flags, self.is_container) {
             if generic.inherited {
                 fmt_tuple!(g: generic_inherited, f);
             }
@@ -373,7 +379,7 @@ impl<N: AceFlagsIdents> AceFlagsRepresenter<N> {
 
         let mut ace_flags = self.flags;
 
-        if let Some(generic) = N::to_generic(ace_flags) {
+        if let Some(generic) = N::to_generic(ace_flags, self.is_container) {
             if generic.inherited {
                 fmt_plain_list!(g: generic_inherited, f, first_item);
             }
