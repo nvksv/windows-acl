@@ -144,8 +144,7 @@ pub struct AceFlagsFullIdents {}
 impl AceFlagsIdents for AceFlagsFullIdents {
     const DEBUG_MODE: AceFlagsDebugMode = AceFlagsDebugMode::Tuple;
     const DEBUG_NAME: &'static str = "AceFlags";
-    const DISPLAY_MODE: AceFlagsDebugMode = AceFlagsDebugMode::Tuple;
-    const DISPLAY_NAME: &'static str = "AceFlags";
+    const DISPLAY_MODE: AceFlagsDebugMode = AceFlagsDebugMode::PlainList;
 
     fn to_generic(ace_flags: ACE_FLAGS) -> Option<AceGenericFlags> {
         ace_flags_to_generic(ace_flags)
@@ -207,8 +206,7 @@ pub struct AceFlagsShortIdents {}
 impl AceFlagsIdents for AceFlagsShortIdents {
     const DEBUG_MODE: AceFlagsDebugMode = AceFlagsDebugMode::Tuple;
     const DEBUG_NAME: &'static str = "AceFlags";
-    const DISPLAY_MODE: AceFlagsDebugMode = AceFlagsDebugMode::Tuple;
-    const DISPLAY_NAME: &'static str = "AceFlags";
+    const DISPLAY_MODE: AceFlagsDebugMode = AceFlagsDebugMode::PlainList;
 
     fn to_generic(ace_flags: ACE_FLAGS) -> Option<AceGenericFlags> {
         ace_flags_to_generic(ace_flags)
