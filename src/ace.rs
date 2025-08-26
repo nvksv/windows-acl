@@ -23,7 +23,7 @@ use windows::{
 use crate::{
     utils::{acl_entry_size, DebugIdent, DebugUnpretty},
     types::*,
-    sid::{SIDRef, VSID, IntoVSID},
+    winapi::sid::{SIDRef, VSID, IntoVSID},
     acl_kind::{ACLKind, DACL, SACL, IsACLKind},
 };
 

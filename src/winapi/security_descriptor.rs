@@ -8,6 +8,9 @@ use core::{
     fmt,
     ffi::c_void,
 };
+use std::{
+    os::windows::io::RawHandle
+};
 use windows::{
     core::{Result, Error, PWSTR, HRESULT, BOOL},
     Win32::{
@@ -18,7 +21,7 @@ use windows::{
             Authorization::{
                 SE_OBJECT_TYPE, GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, 
                 SetSecurityInfo, INHERITED_FROMW, GetInheritanceSourceW, SE_FILE_OBJECT,
-                FreeInheritedFromArray,
+                FreeInheritedFromArray, SE_KERNEL_OBJECT, SE_REGISTRY_WOW64_32KEY, SE_REGISTRY_KEY,
             },
             DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
             OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
@@ -32,18 +35,89 @@ use windows::{
 };
 
 use crate::{
-    privilege::SystemPrivilege, 
-    sid::{SIDRef, SID, VSID}, 
     utils::{str_to_wstr, vec_as_pacl, DebugIdent, MaybeSet}, 
     acl_kind::ACLKind,
-    acl::ACL,
+};
+use super::{
+    privilege::SystemPrivilege,
+    sid::{SIDRef, SID}, 
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug)]
-pub enum SDSource {
+pub enum SecurityDescriptorSourceKind {
     Path(String),
     Handle(HANDLE),
 }
+
+#[derive(Debug)]
+pub struct SecurityDescriptorSource {
+    kind: SecurityDescriptorSourceKind,
+    object_type: SE_OBJECT_TYPE,
+}
+
+impl SecurityDescriptorSource {
+    #[inline]
+    pub fn from_handle(handle: HANDLE, object_type: SE_OBJECT_TYPE) -> Self {
+        Self {
+            kind: SecurityDescriptorSourceKind::Handle(handle),
+            object_type
+        }
+    }
+
+    #[inline]
+    pub fn from_file_handle(handle: HANDLE) -> Self {
+        Self::from_handle(handle, SE_FILE_OBJECT)
+    }
+
+    #[inline]
+    pub fn from_file_raw_handle(handle: RawHandle) -> Self {
+        Self::from_handle(HANDLE(handle), SE_FILE_OBJECT)
+    }
+
+    #[inline]
+    pub fn from_kernel_object_handle(handle: HANDLE) -> Self {
+        Self::from_handle(handle, SE_KERNEL_OBJECT)
+    }
+
+    #[inline]
+    pub fn from_registry_handle(handle: HANDLE, is_wow6432key: bool) -> Self {
+        let object_type = if is_wow6432key { SE_REGISTRY_WOW64_32KEY } else { SE_REGISTRY_KEY };
+        Self::from_handle(handle, object_type)
+    }
+
+    #[inline]
+    pub fn from_path(path: &str, object_type: SE_OBJECT_TYPE) -> Self {
+        Self {
+            kind: SecurityDescriptorSourceKind::Path(path.to_string()),
+            object_type
+        }
+    }
+
+    #[inline]
+    pub fn from_file_path(path: &str) -> Self {
+        Self::from_path(path, SE_FILE_OBJECT)
+    }
+
+    #[inline]
+    pub fn from_kernel_object_path(path: &str) -> Self {
+        Self::from_path(path, SE_KERNEL_OBJECT)
+    }
+
+    #[inline]
+    pub fn from_registry_path(path: &str, is_wow6432key: bool) -> Self {
+        let object_type = if is_wow6432key { SE_REGISTRY_WOW64_32KEY } else { SE_REGISTRY_KEY };
+        Self::from_path(path, object_type)
+    }    
+
+    #[inline]
+    pub fn object_type(&self) -> SE_OBJECT_TYPE {
+        self.object_type
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// This structure manages a Windows `SECURITY_DESCRIPTOR` object.
 #[derive(Debug)]
@@ -91,14 +165,11 @@ impl WindowsSecurityDescriptor {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type
     pub fn from_source(
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<Self> {
         let mut obj = Self::new();
-
-        obj.read( source, obj_type, include_sacl )?;
-
+        obj.read( source, include_sacl )?;
         Ok(obj)
     }
 
@@ -106,8 +177,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn read(
         &mut self,
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<()> {
         let mut privilege = if include_sacl {
@@ -119,7 +189,7 @@ impl WindowsSecurityDescriptor {
             None
         };
 
-        let result = self.read_with_privilege( source, obj_type, include_sacl );
+        let result = self.read_with_privilege( source, include_sacl );
 
         if let Some(privilege) = privilege.as_mut() {
             privilege.release()?;
@@ -130,8 +200,7 @@ impl WindowsSecurityDescriptor {
 
     fn read_with_privilege(
         &mut self,
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<()> {
         self.free_descriptor();
@@ -148,11 +217,11 @@ impl WindowsSecurityDescriptor {
         let mut pOwner = PSID(null_mut());
         let mut pGroup = PSID(null_mut());
 
-        let ret = match *source {
-            SDSource::Handle(handle) => unsafe {
+        let ret = match source.kind {
+            SecurityDescriptorSourceKind::Handle(handle) => unsafe {
                 GetSecurityInfo(
                     handle,
-                    obj_type,
+                    source.object_type,
                     flags,
                     Some(&mut pOwner),
                     Some(&mut pGroup),
@@ -161,14 +230,14 @@ impl WindowsSecurityDescriptor {
                     Some(&mut self.pSecurityDescriptor),
                 )
             },
-            SDSource::Path(ref path) => {
+            SecurityDescriptorSourceKind::Path(ref path) => {
                 let mut wPath: Vec<u16> = str_to_wstr(path);
                 let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
 
                 unsafe {
                     GetNamedSecurityInfoW(
                         wPath,
-                        obj_type,
+                        source.object_type,
                         flags,
                         Some(&mut pOwner),
                         Some(&mut pGroup),
@@ -209,8 +278,7 @@ impl WindowsSecurityDescriptor {
     /// On error, `false` is returned.
     pub fn write(
         &mut self,
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<()> {
         let mut privilege = if matches!(&self.sacl, MaybeSet::Set(_)) || matches!(&self.sacl_is_protected, MaybeSet::Set(_)) {
@@ -222,7 +290,7 @@ impl WindowsSecurityDescriptor {
             None
         };
 
-        let result = self.write_with_privilege( source, obj_type, include_sacl );
+        let result = self.write_with_privilege( source, include_sacl );
 
         if let Some(privilege) = privilege.as_mut() {
             privilege.release()?;
@@ -233,8 +301,7 @@ impl WindowsSecurityDescriptor {
 
     fn write_with_privilege(
         &mut self,
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<()> {
         let mut dacl = None;
@@ -292,11 +359,11 @@ impl WindowsSecurityDescriptor {
 
         //
 
-        let ret = match *source {
-            SDSource::Handle(handle) => unsafe {
+        let ret = match source.kind {
+            SecurityDescriptorSourceKind::Handle(handle) => unsafe {
                 SetSecurityInfo(
                     handle,
-                    obj_type,
+                    source.object_type,
                     flags,
                     owner,
                     group,
@@ -304,13 +371,13 @@ impl WindowsSecurityDescriptor {
                     sacl,
                 )
             },
-            SDSource::Path(ref path) => {
+            SecurityDescriptorSourceKind::Path(ref path) => {
                 let mut wPath: Vec<u16> = str_to_wstr(path);
                 let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
                 unsafe {
                     SetNamedSecurityInfoW(
                         wPath,
-                        obj_type,
+                        source.object_type,
                         flags,
                         owner,
                         group,
@@ -326,20 +393,19 @@ impl WindowsSecurityDescriptor {
             return Err(err);
         }
 
-        self.read_with_privilege(source, obj_type, include_sacl)?;
+        self.read_with_privilege(source, include_sacl)?;
 
         Ok(())
     }
 
     pub fn take_ownership<'s>(
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         owner: SIDRef<'s>
     ) -> Result<()> {
         let mut privilege = SystemPrivilege::by_name("SeTakeOwnershipPrivilege")?;
         privilege.acquire()?;
 
-        let result = Self::take_ownership_with_privilege( source, obj_type, owner );
+        let result = Self::take_ownership_with_privilege( source, owner );
 
         privilege.release()?;
 
@@ -347,17 +413,16 @@ impl WindowsSecurityDescriptor {
     }
 
     fn take_ownership_with_privilege<'s>(
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         owner: SIDRef<'s>
     ) -> Result<()> {
         let flags = OWNER_SECURITY_INFORMATION;
 
-        let ret = match *source {
-            SDSource::Handle(handle) => unsafe {
+        let ret = match source.kind {
+            SecurityDescriptorSourceKind::Handle(handle) => unsafe {
                 SetSecurityInfo(
                     handle,
-                    obj_type,
+                    source.object_type,
                     flags,
                     Some(owner.psid()),
                     None,
@@ -365,13 +430,13 @@ impl WindowsSecurityDescriptor {
                     None,
                 )
             },
-            SDSource::Path(ref path) => {
+            SecurityDescriptorSourceKind::Path(ref path) => {
                 let mut wPath: Vec<u16> = str_to_wstr(path);
                 let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
                 unsafe {
                     SetNamedSecurityInfoW(
                         wPath,
-                        obj_type,
+                        source.object_type,
                         flags,
                         Some(owner.psid()),
                         None,
@@ -664,14 +729,13 @@ impl WindowsSecurityDescriptor {
 
     pub fn get_inheritance_source<'r, K: ACLKind>( 
         &self, 
-        source: &SDSource,
-        object_type: SE_OBJECT_TYPE,
+        source: &SecurityDescriptorSource,
         pacl: *const _ACL,
     ) -> Result<WindowsInheritedFrom> {
         if pacl.is_null() {
             return Err(Error::empty());
         }
-        let SDSource::Path(path) = source else {
+        let SecurityDescriptorSourceKind::Path(path) = &source.kind else {
             return Err(Error::empty());
         };
 
@@ -682,7 +746,7 @@ impl WindowsSecurityDescriptor {
             GenericAll: 0,
         };
 
-        let is_container = object_type == SE_FILE_OBJECT;
+        let is_container = source.object_type == SE_FILE_OBJECT;
 
         let mut wPath: Vec<u16> = str_to_wstr(path);
         let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
@@ -696,7 +760,7 @@ impl WindowsSecurityDescriptor {
         let ret = unsafe {
             GetInheritanceSourceW(
                 wPath,
-                object_type, 
+                source.object_type, 
                 K::get_security_information_bit(),
                 is_container,
                 None,

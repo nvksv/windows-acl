@@ -12,13 +12,12 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, INVALID_HANDLE_VALUE
-        }, Security::{
-            AddResourceAttributeAce, AdjustTokenPrivileges, LookupPrivilegeValueW, ACL as _ACL, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY 
-        }, System::{
-            Threading::{
-                GetCurrentProcess, OpenProcessToken,
-            },
+            ERROR_INSUFFICIENT_BUFFER,
+        }, 
+        Security::{
+            ACL as _ACL,
+        }, 
+        System::{
             WindowsProgramming::GetUserNameW,
         }
     },
@@ -26,10 +25,6 @@ use windows::{
 use windows::{
     Win32::{
         Security::{
-            Authorization::{
-                SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
-                SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
-            },
             AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce,
             GetAce, GetAclInformation, InitializeAcl, IsValidAcl,
             AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
@@ -55,10 +50,10 @@ use windows::{
 };
 
 use crate::{
-    acl_kind::{DACL, SACL},
+    acl_kind::{DACL, SACL, },
     ace::ACE,
-    sid::VSID,
-    types::{AceType, ACCESS_MASK}, ACLKind,
+    winapi::sid::VSID,
+    types::{AceType, ACCESS_MASK},
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -103,11 +98,6 @@ pub(crate) fn str_to_wstr( r: &str ) -> Vec<u16> {
     OsStr::new(r).encode_wide().chain(once(0)).collect()
 }
 
-// #[inline(always)]
-// pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
-//     r as *mut _ as *mut *mut c_void
-// }
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Retrieves the user name of the current user.
@@ -120,13 +110,13 @@ pub fn current_user_account_name() -> Result<String> {
             &mut username_size
         ) 
     } {
+        Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
         Ok(()) => {
             return Err(Error::empty());
         },
-        Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
-            return Err(e);
-        },
-        Err(_) => {}
+        Err(err) => {
+            return Err(err);
+        }
     };
 
     let mut username: Vec<u16> = Vec::with_capacity(username_size as usize);

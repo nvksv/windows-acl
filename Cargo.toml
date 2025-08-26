@@ -1,8 +1,8 @@
 [package]
 name = "windows-acl"
 version = "1.0.0"
-edition = "2021"
-authors = ["William Woodruff <william@trailofbits.com>", "yying <contact@trailofbits.com>"]
+edition = "2024"
+authors = ["Sergey V. Kokorin <nvksv@nvksv.ru>", "William Woodruff <william@trailofbits.com>", "yying <contact@trailofbits.com>"]
 description = "Rust crate to simplify Windows ACL operations"
 documentation = "https://trailofbits.github.io/windows-acl"
 homepage = "https://trailofbits.github.io/windows-acl"
@@ -34,13 +34,6 @@ features = [
     "Win32_System_WindowsProgramming",
     "Win32_Storage_FileSystem",
 ]
-
-[dependencies.windows-strings]
-version = "0.4"
-
-# [dependencies.winapi]
-# version = "0.3.5"
-# features = ["aclapi", "errhandlingapi", "handleapi", "sddl", "securitybaseapi", "winbase", "winerror", "minwindef", "ntdef", "accctrl", "winnt", "processthreadsapi"]
 
 [package.metadata.docs.rs]
 all-features = true

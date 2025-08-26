@@ -21,7 +21,7 @@ use windows::{
 use crate::{
     utils::{acl_entry_size, DebugIdent},
     types::*,
-    sid::{SIDRef, VSID, IntoVSID},
+    winapi::sid::{SIDRef, VSID, IntoVSID},
     acl_kind::{ACLKind, DACL, SACL, IsACLKind},
 };
 
@@ -106,11 +106,15 @@ fn ace_flags_to_generic( ace_flags: ACE_FLAGS, is_container: bool ) -> Option<Ac
     let inherited = ace_flags.contains(INHERITED_ACE);
     let this_container_only = ace_flags.contains(NO_PROPAGATE_INHERIT_ACE);
 
+    if this_container_only && (inherited || is_container) {
+        return None;
+    }
+
     let oi = ace_flags.contains(OBJECT_INHERIT_ACE);
     let ci = ace_flags.contains(CONTAINER_INHERIT_ACE);
     let io = ace_flags.contains(INHERIT_ONLY_ACE);
 
-    if is_container && (this_container_only || oi || ci || io) {
+    if is_container && (this_container_only && (oi || ci || io)) {
         return None;
     }
 

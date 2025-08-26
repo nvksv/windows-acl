@@ -1,11 +1,5 @@
 #![allow(non_snake_case)]
 
-mod access_rights;
-mod ace_flags;
-mod object_types;
-mod ace_types;
-mod sid_types;
-
 use core::{ops, default, fmt};
 use windows::{
     core::Result,
@@ -28,9 +22,26 @@ use windows::{
 
 use crate::utils::DebugIdent;
 
-pub use access_rights::{ACCESS_MASK, IntoAccessMask, FileAccessRightsRepresenter, AccessMaskIdents, FileAccessRightsFullIdents, FileAccessRightsShortIdents};
-pub use ace_flags::{IntoAceFlags, AceFlagsRepresenter, AceFlagsIdents, AceFlagsFullIdents, AceFlagsShortIdents, AceGenericFlags, AceGenericKind};
-pub use object_types::ObjectType;
-pub use ace_types::AceType;
-pub use sid_types::SidType;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SidType {
+    User = 1,
+    Group,
+    Domain,
+    Alias,
+    WellKnownGroup,
+    DeletedAccount,
+    Invalid,
+    Unknown,
+    Computer,
+    Label,
+    LogonSession
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
