@@ -23,11 +23,13 @@ pub mod helper {
     pub use crate::utils::{current_user_account_name, DebugIdent, DebugUnpretty};
 }
 
-pub mod windows {
-    pub use crate::windows_security_descriptor::{WindowsSecurityDescriptor};
+pub mod lowlevel {
+    pub use crate::windows_security_descriptor::WindowsSecurityDescriptor as SecurityDescriptor;
+    pub use crate::privilege::Privilege;
 }
 
 /// Reexport
+pub use ::windows;
 pub use ::windows::core::{Result, Error};
 pub use ::fallible_iterator;
 

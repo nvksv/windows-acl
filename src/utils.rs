@@ -71,8 +71,8 @@ pub enum MaybePtr<P, V> {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub enum MaybeSet<U, S> {
-    NotSet(U),
+pub enum MaybeSet<NS, S> {
+    NotSet(NS),
     Set(S),
 }
 
@@ -123,10 +123,10 @@ pub fn current_user_account_name() -> Result<String> {
         Ok(()) => {
             return Err(Error::empty());
         },
-        Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+        Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+        Err(e) => {
             return Err(e);
         },
-        Err(_) => {}
     };
 
     let mut username: Vec<u16> = Vec::with_capacity(username_size as usize);

@@ -110,11 +110,10 @@ impl<'r> SIDRef<'r> {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) => {
                 return Err(e);
             },
-            Err(_) => {}
-
         };
 
         let mut name = [0_u16].repeat( (name_len as usize) + 1 );
@@ -179,10 +178,10 @@ impl<'r> SIDRef<'r> {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) => {
                 return Err(e);
             },
-            Err(_) => {}
         };
 
         if domain_sid_size == 0 {
@@ -347,10 +346,10 @@ impl SID {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) => {
                 return Err(e);
             },
-            Err(_) => {}
         };
 
         if sid_size == 0 {
@@ -404,11 +403,11 @@ impl SID {
                 unsafe { CloseHandle( hProcess ) }?;
                 return Err(Error::empty());
             },
-            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) => {
                 let _ = unsafe { CloseHandle( hProcess ) };
                 return Err(e);
             },
-            Err(_) => {}
         };
 
         if sid_and_attributes_size == 0 {
@@ -488,10 +487,10 @@ impl SID {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) => {
                 return Err(e);
             },
-            Err(_) => {}
         };
 
         if sid_size == 0 {

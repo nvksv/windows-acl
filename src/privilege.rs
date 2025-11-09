@@ -63,14 +63,20 @@ use crate::utils::str_to_wstr;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
-pub struct SystemPrivilege {
+pub struct Privilege {
     tkp: TOKEN_PRIVILEGES,
+    previous_tkp: TOKEN_PRIVILEGES,
+    privilege_was_acquired: bool,
 }
 
-impl SystemPrivilege {
+impl Privilege {
     pub fn by_name(name: &str) -> Result<Self> {
         let mut tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
+        let mut previous_tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
         
+        tkp.PrivilegeCount = 1;
+        previous_tkp.PrivilegeCount = 1;
+
         let mut wPrivilegeName: Vec<u16> = str_to_wstr(name);
         let wPrivilegeName = PWSTR(wPrivilegeName.as_mut_ptr() as *mut u16);
 
@@ -82,19 +88,33 @@ impl SystemPrivilege {
             )
         }?;
 
-        tkp.PrivilegeCount = 1;
-
         Ok(Self {
-            tkp
+            tkp,
+            previous_tkp,
+            privilege_was_acquired: false,
         })
     }
 
     pub fn acquire( &mut self ) -> Result<()> {
-        self.adjust_privilege( true )
+        if self.privilege_was_acquired {
+            unreachable!()
+        }
+
+        self.adjust_privilege( true )?;
+
+        self.privilege_was_acquired = true;
+        Ok(())
     }
 
     pub fn release(&mut self) -> Result<()> {
-        self.adjust_privilege( false )
+        if !self.privilege_was_acquired {
+            unreachable!()
+        }
+
+        self.restore_privilege()?;
+
+        self.privilege_was_acquired = false;
+        Ok(())
     }
 
     fn adjust_privilege( &mut self, enabled: bool ) -> Result<()> {
@@ -114,32 +134,69 @@ impl SystemPrivilege {
             )
         }?;
 
-        match unsafe {
+        let mut previous_state_length: u32 = 0;
+
+        match unsafe { 
             AdjustTokenPrivileges(
                 hToken,
                 false,
                 Some(&mut self.tkp),
+                mem::size_of_val(&self.previous_tkp) as u32,
+                Some(&mut self.previous_tkp),
+                Some(&mut previous_state_length),
+            )
+        } {
+            Ok(()) => {},
+            Err(e) => {
+                let _ = unsafe { CloseHandle(hToken) };
+                return Err(e);
+            },
+        };
+
+        unsafe { CloseHandle(hToken) }?;
+
+        Ok(())
+    }
+
+    fn restore_privilege( &mut self ) -> Result<()> {
+
+        let mut hToken: HANDLE = INVALID_HANDLE_VALUE;
+        unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut hToken,
+            )
+        }?;
+
+        match unsafe { 
+            AdjustTokenPrivileges(
+                hToken,
+                false,
+                Some(&mut self.previous_tkp),
                 0,
                 None,
                 None,
             )
         } {
-            Ok(()) => {
-                unsafe { CloseHandle(hToken) }?;
-            },
+            Ok(()) => {},
             Err(e) => {
                 let _ = unsafe { CloseHandle(hToken) };
                 return Err(e);
-            }
+            },
         };
+
+        unsafe { CloseHandle(hToken) }?;
 
         Ok(())
     }
 }
 
-impl Drop for SystemPrivilege {
+impl Drop for Privilege {
     fn drop(&mut self) {
-        let _ = self.release();
+        if self.privilege_was_acquired {
+            let _ = self.release();
+        }
     }
 }
 

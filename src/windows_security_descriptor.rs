@@ -8,31 +8,22 @@ use core::{
     fmt,
     ffi::c_void,
 };
+use std::mem;
 use windows::{
-    core::{Result, Error, PWSTR, HRESULT, BOOL},
     Win32::{
         Foundation::{
-            ERROR_SUCCESS, HLOCAL, LocalFree, HANDLE,
+            ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree
         },
         Security::{
-            Authorization::{
-                SE_OBJECT_TYPE, GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, 
-                SetSecurityInfo, INHERITED_FROMW, GetInheritanceSourceW, SE_FILE_OBJECT,
-                FreeInheritedFromArray,
-            },
-            DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-            OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-            PSID, SACL_SECURITY_INFORMATION, UNPROTECTED_DACL_SECURITY_INFORMATION, 
-            PROTECTED_SACL_SECURITY_INFORMATION, UNPROTECTED_SACL_SECURITY_INFORMATION,
-            ACL as _ACL, OBJECT_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorSacl,
-            GetSecurityDescriptorOwner, GetSecurityDescriptorGroup, GetSecurityDescriptorControl,
-            SE_DACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, SE_SACL_PROTECTED, GENERIC_MAPPING,
+            ACL as _ACL, Authorization::{
+                FreeInheritedFromArray, GetEffectiveRightsFromAclW, GetInheritanceSourceW, GetNamedSecurityInfoW, GetSecurityInfo, INHERITED_FROMW, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SE_OBJECT_TYPE, SetNamedSecurityInfoW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W, BuildTrusteeWithSidW, 
+            }, DACL_SECURITY_INFORMATION, GENERIC_MAPPING, GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorGroup, GetSecurityDescriptorOwner, GetSecurityDescriptorSacl, LABEL_SECURITY_INFORMATION, OBJECT_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PROTECTED_SACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SE_SACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, UNPROTECTED_DACL_SECURITY_INFORMATION, UNPROTECTED_SACL_SECURITY_INFORMATION
         },
-    },
+    }, core::{BOOL, Error, HRESULT, PWSTR, Result}
 };
 
 use crate::{
-    privilege::SystemPrivilege, 
+    privilege::Privilege, 
     sid::{SIDRef, SID, VSID}, 
     utils::{str_to_wstr, vec_as_pacl, DebugIdent, MaybeSet}, 
     acl_kind::ACLKind,
@@ -60,7 +51,7 @@ pub struct WindowsSecurityDescriptor {
 }
 
 impl WindowsSecurityDescriptor {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             pSecurityDescriptor: PSECURITY_DESCRIPTOR(null_mut()),
             dacl: MaybeSet::NotSet(null()),
@@ -80,27 +71,27 @@ impl WindowsSecurityDescriptor {
         self.pSecurityDescriptor = PSECURITY_DESCRIPTOR(null_mut());
     }
 
-    /// Returns a `SecurityDescriptor` object for the specified object source.
-    ///
-    /// # Arguments
-    /// * `source` - An object handle or a string containing the named object path.
-    /// * `obj_type` - The named object path's type. See [SE_OBJECT_TYPE](https://docs.microsoft.com/en-us/windows/desktop/api/accctrl/ne-accctrl-_se_object_type).
-    /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
-    ///                System ACL entries.
-    ///
-    /// # Errors
-    /// On error, a Windows error code is wrapped in an `Err` type
-    pub fn from_source(
-        source: &SDSource,
-        obj_type: SE_OBJECT_TYPE,
-        include_sacl: bool,
-    ) -> Result<Self> {
-        let mut obj = Self::new();
+    // /// Returns a `SecurityDescriptor` object for the specified object source.
+    // ///
+    // /// # Arguments
+    // /// * `source` - An object handle or a string containing the named object path.
+    // /// * `obj_type` - The named object path's type. See [SE_OBJECT_TYPE](https://docs.microsoft.com/en-us/windows/desktop/api/accctrl/ne-accctrl-_se_object_type).
+    // /// * `include_sacl` - A boolean specifying whether the returned `ACL` object will be able to enumerate and set
+    // ///                System ACL entries.
+    // ///
+    // /// # Errors
+    // /// On error, a Windows error code is wrapped in an `Err` type
+    // pub fn from_source(
+    //     source: &SDSource,
+    //     obj_type: SE_OBJECT_TYPE,
+    //     include_sacl: bool,
+    // ) -> Result<Self> {
+    //     let mut obj = Self::new();
 
-        obj.read( source, obj_type, include_sacl )?;
+    //     obj.read( source, obj_type, include_sacl )?;
 
-        Ok(obj)
-    }
+    //     Ok(obj)
+    // }
 
     //
 
@@ -111,7 +102,7 @@ impl WindowsSecurityDescriptor {
         include_sacl: bool,
     ) -> Result<()> {
         let mut privilege = if include_sacl {
-            let mut privilege = SystemPrivilege::by_name("SeSecurityPrivilege")?;
+            let mut privilege = Privilege::by_name("SeSecurityPrivilege")?;
             privilege.acquire()?;
 
             Some(privilege)
@@ -214,7 +205,7 @@ impl WindowsSecurityDescriptor {
         include_sacl: bool,
     ) -> Result<()> {
         let mut privilege = if matches!(&self.sacl, MaybeSet::Set(_)) || matches!(&self.sacl_is_protected, MaybeSet::Set(_)) {
-            let mut privilege = SystemPrivilege::by_name("SeSecurityPrivilege")?;
+            let mut privilege = Privilege::by_name("SeSecurityPrivilege")?;
             privilege.acquire()?;
 
             Some(privilege)
@@ -336,7 +327,7 @@ impl WindowsSecurityDescriptor {
         obj_type: SE_OBJECT_TYPE,
         owner: SIDRef<'s>
     ) -> Result<()> {
-        let mut privilege = SystemPrivilege::by_name("SeTakeOwnershipPrivilege")?;
+        let mut privilege = Privilege::by_name("SeTakeOwnershipPrivilege")?;
         privilege.acquire()?;
 
         let result = Self::take_ownership_with_privilege( source, obj_type, owner );
@@ -718,6 +709,35 @@ impl WindowsSecurityDescriptor {
         })
     }
 
+    //
+
+    pub fn get_effective_access_rigths( &self, sid: SIDRef<'_> ) -> Result<u32> {
+        let mut trustee = unsafe { mem::zeroed::<TRUSTEE_W>() };
+
+        unsafe {
+            BuildTrusteeWithSidW( 
+                &mut trustee, 
+                Some(sid.psid())
+            )
+        }
+
+        let mut access_mask: u32 = 0;
+
+        let ret = unsafe {
+            GetEffectiveRightsFromAclW( 
+                self.dacl().unwrap_or(null()), 
+                &trustee, 
+                &mut access_mask
+            )
+        };
+
+        if ret != ERROR_SUCCESS {
+            let err = Error::from_hresult(HRESULT::from_win32(ret.0));
+            return Err(err);
+        }
+
+        Ok(access_mask)
+    }
 }
 
 impl Drop for WindowsSecurityDescriptor {
