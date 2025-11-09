@@ -63,12 +63,12 @@ impl WindowsSecurityDescriptor {
     fn new() -> Self {
         Self {
             pSecurityDescriptor: PSECURITY_DESCRIPTOR(null_mut()),
-            dacl: MaybeSet::Unset(null()),
-            sacl: MaybeSet::Unset(null()),
-            owner: MaybeSet::Unset(PSID(null_mut())),
-            group: MaybeSet::Unset(PSID(null_mut())),
-            dacl_is_protected: MaybeSet::Unset(false),
-            sacl_is_protected: MaybeSet::Unset(false),
+            dacl: MaybeSet::NotSet(null()),
+            sacl: MaybeSet::NotSet(null()),
+            owner: MaybeSet::NotSet(PSID(null_mut())),
+            group: MaybeSet::NotSet(PSID(null_mut())),
+            dacl_is_protected: MaybeSet::NotSet(false),
+            sacl_is_protected: MaybeSet::NotSet(false),
         }
     }
 
@@ -185,10 +185,10 @@ impl WindowsSecurityDescriptor {
             return Err(err);
         }
         
-        self.dacl = MaybeSet::Unset(pDacl);
-        self.sacl = MaybeSet::Unset(pSacl);
-        self.owner = MaybeSet::Unset(pOwner);
-        self.group = MaybeSet::Unset(pGroup);
+        self.dacl = MaybeSet::NotSet(pDacl);
+        self.sacl = MaybeSet::NotSet(pSacl);
+        self.owner = MaybeSet::NotSet(pOwner);
+        self.group = MaybeSet::NotSet(pGroup);
 
         Ok(())
     }
@@ -405,7 +405,7 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.dacl = MaybeSet::Unset(
+        self.dacl = MaybeSet::NotSet(
             if dacl_present.as_bool() { pdacl as *const _ACL } else { null() }
         );
 
@@ -426,7 +426,7 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.sacl = MaybeSet::Unset(
+        self.sacl = MaybeSet::NotSet(
             if sacl_present.as_bool() { pdacl as *const _ACL } else { null() }
         );
 
@@ -445,7 +445,7 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.owner = MaybeSet::Unset(psid);
+        self.owner = MaybeSet::NotSet(psid);
 
         Ok(())
     }
@@ -462,7 +462,7 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.group = MaybeSet::Unset(psid);
+        self.group = MaybeSet::NotSet(psid);
 
         Ok(())
     }
@@ -479,7 +479,7 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.dacl_is_protected = MaybeSet::Unset(
+        self.dacl_is_protected = MaybeSet::NotSet(
             SECURITY_DESCRIPTOR_CONTROL(control).contains(SE_DACL_PROTECTED)
         );
 
@@ -498,7 +498,7 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.sacl_is_protected = MaybeSet::Unset(
+        self.sacl_is_protected = MaybeSet::NotSet(
             SECURITY_DESCRIPTOR_CONTROL(control).contains(SE_SACL_PROTECTED)
         );
 
@@ -510,7 +510,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn dacl( &self ) -> Option<*const _ACL> {
         match &self.dacl {
-            MaybeSet::Unset(p) => {
+            MaybeSet::NotSet(p) => {
                 if (*p).is_null() {
                     None
                 } else {
@@ -544,7 +544,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn dacl_is_protected( &self ) -> bool {
         match &self.dacl_is_protected {
-            MaybeSet::Unset(p) => {
+            MaybeSet::NotSet(p) => {
                 *p
             },
             MaybeSet::Set(v) => {
@@ -566,7 +566,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn sacl( &self ) -> Option<*const _ACL> {
         match &self.sacl {
-            MaybeSet::Unset(p) => {
+            MaybeSet::NotSet(p) => {
                 if (*p).is_null() {
                     None
                 } else {
@@ -600,7 +600,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn sacl_is_protected( &self ) -> bool {
         match &self.sacl_is_protected {
-            MaybeSet::Unset(p) => {
+            MaybeSet::NotSet(p) => {
                 *p
             },
             MaybeSet::Set(v) => {
@@ -622,7 +622,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn owner<'s>( &'s self ) -> Result<Option<SIDRef<'s>>> {
         match &self.owner {
-            MaybeSet::Unset(ppsid) => {
+            MaybeSet::NotSet(ppsid) => {
                 Ok(SIDRef::from_psid(*ppsid)?)
             },
             MaybeSet::Set(sid) => {
@@ -644,7 +644,7 @@ impl WindowsSecurityDescriptor {
 
     pub fn group<'s, 'r>( &'s self ) -> Result<Option<SIDRef<'s>>> {
         match &self.group {
-            MaybeSet::Unset(ppsid) => {
+            MaybeSet::NotSet(ppsid) => {
                 Ok(SIDRef::from_psid(*ppsid)?)
             },
             MaybeSet::Set(sid) => {
@@ -802,7 +802,7 @@ impl fmt::Debug for MaybeSet<*const _ACL, Option<Vec<u8>>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("ACL");
         let f = match self {
-            MaybeSet::Unset(p) => {
+            MaybeSet::NotSet(p) => {
                 f.field(p)
             },
             MaybeSet::Set(None) => {
@@ -820,7 +820,7 @@ impl fmt::Debug for MaybeSet<PSID, SID> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("SID");
         let f = match self {
-            MaybeSet::Unset(u) => {
+            MaybeSet::NotSet(u) => {
                 f.field(u)
             },
             MaybeSet::Set(s) => {
@@ -834,7 +834,7 @@ impl fmt::Debug for MaybeSet<PSID, SID> {
 impl fmt::Debug for MaybeSet<bool, bool> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MaybeSet::Unset(u) => {
+            MaybeSet::NotSet(u) => {
                 fmt::Debug::fmt(u, f)
             },
             MaybeSet::Set(s) => {

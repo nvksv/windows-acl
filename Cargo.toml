@@ -24,7 +24,7 @@ path = "src/lib.rs"
 fallible-iterator = "0.3.0"
 
 [dependencies.windows]
-version = "=0.61.1"
+version = "0.62.2"
 features = [
     "Win32_Security",
     "Win32_Security_Authorization",

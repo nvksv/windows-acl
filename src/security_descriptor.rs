@@ -452,6 +452,8 @@ impl SecurityDescriptor {
         WindowsSecurityDescriptor::take_ownership(&source, object_type, current_user.as_ref())
     }
 
+    //
+
 }
 
 impl fmt::Debug for SecurityDescriptor {
