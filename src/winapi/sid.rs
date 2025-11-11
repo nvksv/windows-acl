@@ -4,7 +4,10 @@ use core::{
     ffi::c_void, fmt, mem, ptr::null_mut, slice, cmp, hash
 };
 use std::fmt::Debug;
-use crate::utils::{str_to_wstr, DebugUnpretty, MaybePtr};
+use crate::{
+    utils::{str_to_wstr, DebugUnpretty, MaybePtr},
+    winapi::api::ErrorExt,
+};
 use windows::{
     core::{
         Error, Result, HRESULT, PWSTR  
@@ -130,7 +133,7 @@ impl<'r> SIDRef<'r> {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) if e.is_insufficient_buffer() => {},
             Err(e) => {
                 return Err(e);
             },
@@ -204,7 +207,7 @@ impl<'r> SIDRef<'r> {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) if e.is_insufficient_buffer() => {},
             Err(e) => {
                 return Err(e);
             },
@@ -354,7 +357,7 @@ impl SID {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) if e.is_insufficient_buffer() => {},
             Err(e) => {
                 return Err(e);
             },
@@ -412,7 +415,7 @@ impl SID {
                 unsafe { CloseHandle( hProcess ) }?;
                 return Err(Error::empty());
             },
-            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) if e.is_insufficient_buffer() => {},
             Err(e) => {
                 let _ = unsafe { CloseHandle( hProcess ) };
                 return Err(e);
@@ -496,7 +499,7 @@ impl SID {
             Ok(()) => {
                 return Err(Error::empty());
             },
-            Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+            Err(e) if e.is_insufficient_buffer() => {},
             Err(e) => {
                 return Err(e);
             },

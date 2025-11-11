@@ -185,29 +185,6 @@ impl WindowsSecurityDescriptor {
         source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<()> {
-        let mut privilege = if include_sacl {
-            let mut privilege = Privilege::by_name("SeSecurityPrivilege")?;
-            privilege.acquire()?;
-
-            Some(privilege)
-        } else {
-            None
-        };
-
-        let result = self.read_with_privilege( source, include_sacl );
-
-        if let Some(privilege) = privilege.as_mut() {
-            privilege.release()?;
-        }
-
-        result
-    }
-
-    fn read_with_privilege(
-        &mut self,
-        source: &SecurityDescriptorSource,
-        include_sacl: bool,
-    ) -> Result<()> {
         self.free_descriptor();
 
         let mut flags =
@@ -286,29 +263,6 @@ impl WindowsSecurityDescriptor {
         source: &SecurityDescriptorSource,
         include_sacl: bool,
     ) -> Result<()> {
-        let mut privilege = if matches!(&self.sacl, MaybeSet::Set(_)) || matches!(&self.sacl_is_protected, MaybeSet::Set(_)) {
-            let mut privilege = Privilege::by_name("SeSecurityPrivilege")?;
-            privilege.acquire()?;
-
-            Some(privilege)
-        } else {
-            None
-        };
-
-        let result = self.write_with_privilege( source, include_sacl );
-
-        if let Some(privilege) = privilege.as_mut() {
-            privilege.release()?;
-        }
-
-        result
-    }
-
-    fn write_with_privilege(
-        &mut self,
-        source: &SecurityDescriptorSource,
-        include_sacl: bool,
-    ) -> Result<()> {
         let mut dacl = None;
         let mut sacl = None;
         let mut owner = None;
@@ -334,21 +288,27 @@ impl WindowsSecurityDescriptor {
             flags |= if is_protected { PROTECTED_DACL_SECURITY_INFORMATION } else { UNPROTECTED_DACL_SECURITY_INFORMATION };
         }
 
-        if let MaybeSet::Set(sacl_value) = &self.sacl {
-            flags |= SACL_SECURITY_INFORMATION;
-            match sacl_value.as_ref() {
-                Some(sacl_value) => {
-                    sacl = Some(vec_as_pacl(sacl_value));
-                },
-                None => {
-                    sacl = Some(null())
+        //
+
+        if include_sacl {
+            if let MaybeSet::Set(sacl_value) = &self.sacl {
+                flags |= SACL_SECURITY_INFORMATION;
+                match sacl_value.as_ref() {
+                    Some(sacl_value) => {
+                        sacl = Some(vec_as_pacl(sacl_value));
+                    },
+                    None => {
+                        sacl = Some(null())
+                    }
                 }
+            }
+
+            if let MaybeSet::Set(is_protected) = self.sacl_is_protected {
+                flags |= if is_protected { PROTECTED_SACL_SECURITY_INFORMATION } else { UNPROTECTED_SACL_SECURITY_INFORMATION };
             }
         }
 
-        if let MaybeSet::Set(is_protected) = self.sacl_is_protected {
-            flags |= if is_protected { PROTECTED_SACL_SECURITY_INFORMATION } else { UNPROTECTED_SACL_SECURITY_INFORMATION };
-        }
+        //
 
         if let MaybeSet::Set(owner_value) = &self.owner {
             flags |= OWNER_SECURITY_INFORMATION;
@@ -398,26 +358,10 @@ impl WindowsSecurityDescriptor {
             return Err(err);
         }
 
-        self.read_with_privilege(source, include_sacl)?;
-
         Ok(())
     }
 
     pub fn take_ownership<'s>(
-        source: &SecurityDescriptorSource,
-        owner: SIDRef<'s>
-    ) -> Result<()> {
-        let mut privilege = Privilege::by_name("SeTakeOwnershipPrivilege")?;
-        privilege.acquire()?;
-
-        let result = Self::take_ownership_with_privilege( source, owner );
-
-        privilege.release()?;
-
-        result
-    }
-
-    fn take_ownership_with_privilege<'s>(
         source: &SecurityDescriptorSource,
         owner: SIDRef<'s>
     ) -> Result<()> {
@@ -686,6 +630,12 @@ impl WindowsSecurityDescriptor {
 
     pub fn unset_sacl_is_protected( &mut self ) -> Result<()> {
         self.read_sacl_is_protected_from_descriptor()
+    }
+
+    //
+
+    pub fn sacl_is_modified( &self ) -> bool {
+        matches!( &self.sacl, MaybeSet::Set(_) ) || matches!( &self.sacl_is_protected, MaybeSet::Set(_) )
     }
 
     //

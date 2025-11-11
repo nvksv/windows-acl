@@ -12,7 +12,7 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, INVALID_HANDLE_VALUE
+            CloseHandle, HANDLE, INVALID_HANDLE_VALUE
         }, Security::{
             AddResourceAttributeAce, AdjustTokenPrivileges, LookupPrivilegeValueW, ACL as _ACL, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY 
         }, System::{
@@ -57,8 +57,11 @@ use windows::{
 use crate::{
     acl_kind::{DACL, SACL},
     ace::ACE,
-    winapi::sid::VSID,
-    types::{AceType, ACCESS_MASK}, ACLKind,
+    winapi::{
+        api::ErrorExt, sid::VSID,
+    },
+    types::{AceType, ACCESS_MASK}, 
+    ACLKind,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -123,7 +126,7 @@ pub fn current_user_account_name() -> Result<String> {
         Ok(()) => {
             return Err(Error::empty());
         },
-        Err(e) if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) => {},
+        Err(e) if e.is_insufficient_buffer() => {},
         Err(e) => {
             return Err(e);
         },

@@ -13,7 +13,8 @@ pub use acl_kind::{ACLKind, DACL, SACL};
 pub use security_descriptor::{SecurityDescriptor};
 pub use ace::{ACE, ACEFilter, ACEMask, IntoOptionalACEFilter, IntoOptionalACEMask};
 pub use acl::{ACL, ACLEntryIterator, ACLVecList};
-pub use winapi::sid::{SID, SIDRef, VSID};
+pub use winapi::sid::{SID, SIDRef, VSID, IntoVSID};
+pub use winapi::api::ErrorExt;
 pub use types::{AceType, ACCESS_MASK, IntoAccessMask};
 
 pub mod helper {

@@ -8,6 +8,7 @@ use core::{
     marker::PhantomData,
     cmp::min,
 };
+use std::ptr::null;
 use windows::{
     core::{
         Error, Result, HRESULT,
@@ -149,6 +150,13 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     pub fn from_pacl( pacl: *const _ACL ) -> Self {
         Self {
             pacl,
+            _ph: PhantomData,
+        }
+    }
+
+    pub fn from_null() -> Self {
+        Self {
+            pacl: null(),
             _ph: PhantomData,
         }
     }

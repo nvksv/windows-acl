@@ -58,8 +58,12 @@ use crate::{
     winapi::sid::{SIDRef, VSID}, 
     types::*, 
     utils::DebugUnpretty, 
-    winapi::security_descriptor::{
-        SecurityDescriptorSource, WindowsSecurityDescriptor,
+    winapi::{
+        api::ErrorExt,
+        privilege::Privilege,
+        security_descriptor::{
+            SecurityDescriptorSource, WindowsSecurityDescriptor,
+        }
     }, SID 
     
 };
@@ -70,23 +74,22 @@ use crate::{
 pub struct SecurityDescriptor {
     descriptor: WindowsSecurityDescriptor,
     source: SecurityDescriptorSource,
-    include_sacl: bool,
+    sacl_enabled: bool,
+    allow_read_with_backup_privilege: bool,
+    allow_write_with_restore_privilege: bool,
 }
 
 impl SecurityDescriptor {
     pub fn from_source(
         source: SecurityDescriptorSource,
-        include_sacl: bool,
-    ) -> Result<Self> {
-        let mut descriptor = WindowsSecurityDescriptor::new();
-        descriptor.read(&source, include_sacl)?;
-        Ok(
-            Self {
-                descriptor,
-                source,
-                include_sacl,
-            }
-        )
+    ) -> Self {
+        Self {
+            descriptor: WindowsSecurityDescriptor::new(),
+            source,
+            sacl_enabled: false,
+            allow_read_with_backup_privilege: false,
+            allow_write_with_restore_privilege: false,
+        }
     }
 
     /// Creates an `SecurityDescriptor` object from a specified object handle.
@@ -106,36 +109,10 @@ impl SecurityDescriptor {
     pub fn from_handle(
         handle: HANDLE,
         object_type: SE_OBJECT_TYPE,
-        include_sacl: bool,
-    ) -> Result<Self> {
-        let source = SecurityDescriptorSource::from_handle(handle, object_type);
-
-        let mut descriptor = WindowsSecurityDescriptor::new();
-        descriptor.read(&source, include_sacl)?;
-
-        Ok(
-            Self {
-                descriptor,
-                source,
-                include_sacl,
-            }
-        )
-    }
-
-    pub fn from_handle_empty(
-        handle: HANDLE,
-        object_type: SE_OBJECT_TYPE,
-        include_sacl: bool,
     ) -> Self {
-        let source = SecurityDescriptorSource::from_handle(handle, object_type);
-
-        let descriptor = WindowsSecurityDescriptor::new();
-
-        Self {
-            descriptor,
-            source,
-            include_sacl,
-        }
+        Self::from_source(
+            SecurityDescriptorSource::from_handle(handle, object_type)
+        )
     }
 
     /// Creates an `SD` object from a specified file handle.
@@ -150,20 +127,12 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_file_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
-        Self::from_handle(handle, SE_FILE_OBJECT, include_sacl)
+    pub fn from_file_handle(handle: HANDLE) -> Self {
+        Self::from_handle(handle, SE_FILE_OBJECT)
     }
 
-    pub fn from_file_handle_empty(handle: HANDLE, include_sacl: bool) -> Self {
-        Self::from_handle_empty(handle, SE_FILE_OBJECT, include_sacl)
-    }
-
-    pub fn from_file_raw_handle(handle: RawHandle, include_sacl: bool) -> Result<Self> {
-        Self::from_handle(HANDLE(handle), SE_FILE_OBJECT, include_sacl)
-    }
-
-    pub fn from_file_raw_handle_empty(handle: RawHandle, include_sacl: bool) -> Self {
-        Self::from_handle_empty(HANDLE(handle), SE_FILE_OBJECT, include_sacl)
+    pub fn from_file_raw_handle(handle: RawHandle) -> Self {
+        Self::from_handle(HANDLE(handle), SE_FILE_OBJECT)
     }
 
     /// Creates an `SD` object from a specified kernel object handle.
@@ -178,12 +147,8 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_object_handle(handle: HANDLE, include_sacl: bool) -> Result<Self> {
-        Self::from_handle(handle, SE_KERNEL_OBJECT, include_sacl)
-    }
-
-    pub fn from_object_handle_empty(handle: HANDLE, include_sacl: bool) -> Self {
-        Self::from_handle_empty(handle, SE_KERNEL_OBJECT, include_sacl)
+    pub fn from_object_handle(handle: HANDLE) -> Self {
+        Self::from_handle(handle, SE_KERNEL_OBJECT)
     }
 
     /// Creates an `SD` object from a specified registry handle.
@@ -201,24 +166,11 @@ impl SecurityDescriptor {
     pub fn from_registry_handle(
         handle: HANDLE,
         is_wow6432key: bool,
-        include_sacl: bool,
-    ) -> Result<Self> {
-        if is_wow6432key {
-            Self::from_handle(handle, SE_REGISTRY_WOW64_32KEY, include_sacl)
-        } else {
-            Self::from_handle(handle, SE_REGISTRY_KEY, include_sacl)
-        }
-    }
-
-    pub fn from_registry_handle_empty(
-        handle: HANDLE,
-        is_wow6432key: bool,
-        include_sacl: bool,
     ) -> Self {
         if is_wow6432key {
-            Self::from_handle_empty(handle, SE_REGISTRY_WOW64_32KEY, include_sacl)
+            Self::from_handle(handle, SE_REGISTRY_WOW64_32KEY)
         } else {
-            Self::from_handle_empty(handle, SE_REGISTRY_KEY, include_sacl)
+            Self::from_handle(handle, SE_REGISTRY_KEY)
         }
     }
 
@@ -239,36 +191,10 @@ impl SecurityDescriptor {
     pub fn from_path(
         path: &str,
         object_type: SE_OBJECT_TYPE,
-        include_sacl: bool,
-    ) -> Result<Self> {
-        let source = SecurityDescriptorSource::from_path(path, object_type);
-
-        let mut descriptor = WindowsSecurityDescriptor::new();
-        descriptor.read(&source, include_sacl)?;
-
-        Ok(
-            Self {
-                descriptor,
-                source,
-                include_sacl,
-            }
-        )
-    }
-
-    pub fn from_path_empty(
-        path: &str,
-        object_type: SE_OBJECT_TYPE,
-        include_sacl: bool,
     ) -> Self {
-        let source = SecurityDescriptorSource::from_path(path, object_type);
-
-        let descriptor = WindowsSecurityDescriptor::new();
-        
-        Self {
-            descriptor,
-            source,
-            include_sacl,
-        }
+        Self::from_source(
+            SecurityDescriptorSource::from_path(path, object_type)
+        )
     }
 
     /// Creates an `SD` object from a specified file path.
@@ -283,12 +209,8 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_file_path(path: &str, include_sacl: bool) -> Result<Self> {
-        Self::from_path(path, SE_FILE_OBJECT, include_sacl)
-    }
-
-    pub fn from_file_path_empty(path: &str, include_sacl: bool) -> Self {
-        Self::from_path_empty(path, SE_FILE_OBJECT, include_sacl)
+    pub fn from_file_path(path: &str) -> Self {
+        Self::from_path(path, SE_FILE_OBJECT)
     }
 
     /// Creates an `SD` object from a specified kernel object path.
@@ -303,12 +225,8 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_object_path(path: &str, include_sacl: bool) -> Result<Self> {
-        Self::from_path(path, SE_KERNEL_OBJECT, include_sacl)
-    }
-
-    pub fn from_object_path_empty(path: &str, include_sacl: bool) -> Self {
-        Self::from_path_empty(path, SE_KERNEL_OBJECT, include_sacl)
+    pub fn from_object_path(path: &str) -> Self {
+        Self::from_path(path, SE_KERNEL_OBJECT)
     }
 
     /// Creates an `SD` object from a specified registry path.
@@ -326,26 +244,28 @@ impl SecurityDescriptor {
     pub fn from_registry_path(
         path: &str,
         is_wow6432key: bool,
-        include_sacl: bool,
-    ) -> Result<Self> {
+    ) -> Self {
         if is_wow6432key {
-            Self::from_path(path, SE_REGISTRY_WOW64_32KEY, include_sacl)
+            Self::from_path(path, SE_REGISTRY_WOW64_32KEY)
         } else {
-            Self::from_path(path, SE_REGISTRY_KEY, include_sacl)
+            Self::from_path(path, SE_REGISTRY_KEY)
         }
     }
 
-    pub fn from_registry_path_empty(
-        path: &str,
-        is_wow6432key: bool,
-        include_sacl: bool,
-    ) -> Self {
-        if is_wow6432key {
-            Self::from_path_empty(path, SE_REGISTRY_WOW64_32KEY, include_sacl)
-        } else {
-            Self::from_path_empty(path, SE_REGISTRY_KEY, include_sacl)
-        }
+    //
+
+    pub fn enable_sacl( &mut self, enabled: bool ) {
+        self.sacl_enabled = enabled;
     }
+
+    pub fn allow_read_with_backup_privilege( &mut self, allowed: bool ) {
+        self.allow_read_with_backup_privilege = allowed;
+    }
+
+    pub fn allow_write_with_restore_privilege( &mut self, allowed: bool ) {
+        self.allow_write_with_restore_privilege = allowed;
+    }
+
     //
 
     /// Returns the `ObjectType` of the target named object path as specified during the creation of the `ACL` object
@@ -444,12 +364,16 @@ impl SecurityDescriptor {
     //
 
     pub fn sacl( &self ) -> ACL<'_, SACL> {
+        if !self.sacl_enabled {
+            return ACL::from_null();
+        }
+
         let sacl = self.descriptor.sacl().unwrap_or(null());
         ACL::from_pacl(sacl)
     }
 
     pub fn set_sacl( &mut self, dacl: ACLVecList<SACL> ) -> Result<()> {
-        if !self.include_sacl {
+        if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
@@ -465,7 +389,7 @@ impl SecurityDescriptor {
         F: Fn(AceEntryIterator<'s, SACL>) -> Result<R>,
         R: ACLEntryIterator<'r, SACL>,
     {
-        if !self.include_sacl {
+        if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
@@ -480,6 +404,10 @@ impl SecurityDescriptor {
     }
 
     pub fn iter_sacl_with_inheritance_source( &self ) -> Result<ACEWithInheritedFromIterator<'_, SACL>> {
+        if !self.sacl_enabled {
+            return Err(Error::empty());
+        }
+
         let sacl = self.descriptor.sacl().unwrap_or(null());
 
         let inherited_from = self.descriptor.get_inheritance_source::<SACL>(
@@ -498,11 +426,15 @@ impl SecurityDescriptor {
     //
 
     pub fn sacl_is_protected( &self ) -> bool {
+        if !self.sacl_enabled {
+            return false;
+        }
+
         self.descriptor.sacl_is_protected()
     }
 
     pub fn set_sacl_is_protected( &mut self, is_protected: bool ) -> Result<()> {
-        if !self.include_sacl {
+        if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
@@ -510,7 +442,7 @@ impl SecurityDescriptor {
     }
 
     pub fn unset_sacl_is_protected( &mut self ) -> Result<()> {
-        if !self.include_sacl {
+        if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
@@ -523,27 +455,96 @@ impl SecurityDescriptor {
     ///
     /// # Remarks
     /// This is invoked automatically after any add/remove entry operation.
-    pub fn reload(&mut self) -> Result<()> {
-        self.descriptor.read(
-            &self.source,
-            self.include_sacl,
-        )?;
-        Ok(())
+    pub fn read(&mut self) -> Result<()> {
+        if self.sacl_enabled {
+            Privilege::with_security(|| {
+                self.inner_read()
+            })
+        } else {
+            self.inner_read()
+        }
     }
 
-    pub fn write( &mut self ) -> Result<()> {
-        self.descriptor.write(
+    fn inner_read(&mut self) -> Result<()> {
+        match self.descriptor.read(
             &self.source,
-            self.include_sacl,
-        )
+            self.sacl_enabled,
+        ) {
+            Ok(()) => {
+                return Ok(());
+            },
+            Err(e) if e.is_access_denied() && self.allow_read_with_backup_privilege => {}, 
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        Privilege::with_backup(|| {
+            self.descriptor.read(
+                &self.source,
+                self.sacl_enabled,
+            )            
+        })
     }
 
     //
 
-    pub fn take_ownership_from_file_path<'s>( path: &str ) -> Result<()> {
-        let source = SecurityDescriptorSource::from_file_path(path);
+    pub fn write( &mut self ) -> Result<()> {
+        if self.sacl_enabled && self.descriptor.sacl_is_modified() {
+            Privilege::with_security(|| {
+                self.inner_write()
+            })
+        } else {
+            self.inner_write()
+        }
+    }
+
+    fn inner_write( &mut self ) -> Result<()> {
+        match self.descriptor.write(
+            &self.source,
+            self.sacl_enabled,
+        ) {
+            Ok(()) => {
+                return Ok(());
+            },
+            Err(e) if e.is_access_denied() && self.allow_write_with_restore_privilege => {}, 
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        Privilege::with_restore(|| {
+            self.descriptor.write(
+                &self.source,
+                self.sacl_enabled,
+            )            
+        })
+    }
+
+    //
+
+    pub fn write_and_reload( &mut self ) -> Result<()> {
+        if self.sacl_enabled {
+            Privilege::with_security(|| {
+                self.inner_write_and_reload()
+            })
+        } else {
+            self.inner_write_and_reload()
+        }
+    }
+
+    fn inner_write_and_reload( &mut self ) -> Result<()> {
+        self.inner_write()?;
+        self.inner_read()
+    }
+
+    //
+
+    pub fn take_ownership<'s>( &self ) -> Result<()> {
         let current_user = SID::current_user()?;
-        WindowsSecurityDescriptor::take_ownership(&source, current_user.as_ref())
+        Privilege::with_take_ownership(|| {
+            WindowsSecurityDescriptor::take_ownership(&self.source, current_user.as_ref())
+        })
     }
 
     //

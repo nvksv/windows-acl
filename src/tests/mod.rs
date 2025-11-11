@@ -2,7 +2,8 @@
 
 use crate::{
     utils::current_user_account_name, ACE, ACLKind, AceType, SecurityDescriptor, SID, VSID, ACLEntryIterator, ACEFilter, ACEMask, IntoOptionalACEFilter, IntoOptionalACEMask, ACCESS_MASK,
-    helper::DebugUnpretty
+    helper::DebugUnpretty,
+    winapi::api::ErrorExt,
 };
 use std::{
     env::current_exe,
@@ -176,7 +177,8 @@ fn query_dacl_unit_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let sd = SecurityDescriptor::from_file_path(path, false).unwrap();
+    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.read().unwrap();
     println!("sd = {:#?}", &sd);
 
     let entries = sd.dacl().all().unwrap();
@@ -241,10 +243,12 @@ fn query_sacl_unit_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let sd = match SecurityDescriptor::from_file_path(path, true) {
+    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.enable_sacl(true);
+    match sd.read() {
         Ok(obj) => obj,
         Err(err) => {
-            assert_eq!(err.code(), ERROR_NOT_ALL_ASSIGNED.into());
+            assert!(err.is_not_all_assigned());
             println!("INFO: Terminating query_sacl_unit_test early because we are not Admin.");
             return;
         }
@@ -300,10 +304,11 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
             .access_mode(GENERIC_READ.0 | WRITE_DAC.0 )
             .open(path)
             .unwrap();
-        SecurityDescriptor::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
+        SecurityDescriptor::from_file_raw_handle(file.as_raw_handle())
     } else {
-        SecurityDescriptor::from_file_path(path, false).unwrap()
+        SecurityDescriptor::from_file_path(path)
     };
+    sd.read().unwrap();
 
     sd.update_dacl(|dacl| {
         dacl.add_allow(
@@ -397,10 +402,11 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     let file = create_res.unwrap();
 
     let mut sd = if use_handle {
-        SecurityDescriptor::from_file_raw_handle(file.as_raw_handle(), false).unwrap()
+        SecurityDescriptor::from_file_raw_handle(file.as_raw_handle())
     } else {
-        SecurityDescriptor::from_file_path(path, false).unwrap()
+        SecurityDescriptor::from_file_path(path)
     };
+    sd.read().unwrap();
 
     sd.update_dacl(|dacl| {
         dacl.add_deny(
@@ -483,7 +489,9 @@ fn add_remove_sacl_mil() {
     let path = path_obj.to_str().unwrap_or("");
     assert_ne!(path.len(), 0);
 
-    let mut sd = SecurityDescriptor::from_file_path(path, true).unwrap();
+    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.enable_sacl(true);
+    sd.read().unwrap();
 
     sd.update_sacl(|sacl| {
         sacl.add_mandatory_label(
@@ -537,7 +545,10 @@ fn add_remove_sacl_audit() {
     let path = path_obj.to_str().unwrap_or("");
     assert_ne!(path.len(), 0);
 
-    let mut sd = SecurityDescriptor::from_file_path(path, true).unwrap();
+    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.enable_sacl(true);
+    sd.read().unwrap();
+
     sd.update_sacl(|sacl| {
         sacl.add_audit(
             &sids.current_user,
@@ -589,7 +600,9 @@ fn acl_get_and_remove_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    let mut sd = SecurityDescriptor::from_file_path(path, true).unwrap();
+    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.enable_sacl(true);
+    sd.read().unwrap();
 
     //
 
@@ -660,7 +673,9 @@ fn my_test() {
 
     SecurityDescriptor::take_ownership_from_file_path(path).expect("take_ownership_from_path");
 
-    let mut sd = SecurityDescriptor::from_file_path(path, false).expect("from_file_path");
+    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.read().expect("from_file_path");
+    
     println!("1) sd = {:#?}", &sd);
 
     let entries = sd.iter_dacl_with_inheritance_source().expect("iter_dacl_with_inheritance_source")
