@@ -110,10 +110,47 @@ impl IntoAccessMask for GENERIC_ACCESS_RIGHTS {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub enum AccessMaskDebugMode {
+    Tuple,
+    PlainList,
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub trait AccessMaskIdents {
+    const MODE: AccessMaskDebugMode = AccessMaskDebugMode::Tuple;
+    const NAME: &'static str = "ACCESS_MASK";
+
+    fn generic_full_access() -> Option<DebugIdent> {
+        None
+    }
+
+    fn generic_modify() -> Option<DebugIdent> {
+        None
+    }
+
+    fn generic_read_and_execute() -> Option<DebugIdent> {
+        None
+    }
+
+    fn generic_list_folder_contents() -> Option<DebugIdent> {
+        None
+    }
+
+    fn generic_read() -> Option<DebugIdent> {
+        None
+    }
+
+    fn generic_write() -> Option<DebugIdent> {
+        None
+    }
+
+    fn generic_special_permissions() -> Option<DebugIdent> {
+        None
+    }
+
     fn bit_0000_0001() -> Option<DebugIdent> {
         Some(DebugIdent("0x01"))
     }

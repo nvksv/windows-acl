@@ -21,6 +21,10 @@ pub use types::{AceType, ACCESS_MASK, IntoAccessMask};
 
 pub mod helper {
     pub use crate::utils::{current_user_account_name, DebugIdent, DebugUnpretty};
+    pub use crate::types::{
+        AccessMaskIdents, AceFlagsIdents, AceFlagsFullIdents, AceFlagsShortIdents, FileAccessRightsFullIdents, FileAccessRightsShortIdents,
+        AceFlagsRepresenter, 
+    };
 }
 
 pub mod lowlevel {

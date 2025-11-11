@@ -86,6 +86,24 @@ impl<'r> SIDRef<'r> {
         Ok(VSID::Value(sid))
     }
 
+    pub fn to_account_name_or_sid( &self ) -> Result<String> {
+        match self.lookup_account_name(None) {
+            Ok((name, mut domain_name)) => {
+                let s = if !domain_name.is_empty() {
+                    domain_name.push('\\');   
+                    domain_name.push_str(&name);   
+                    domain_name
+                } else {
+                    name
+                };
+                Ok(s)
+            },
+            Err(_) => {
+                self.to_string()
+            }
+        }
+    }
+
     pub fn lookup_account_name( &self, domain_name: Option<&str> ) -> Result<(String, String)> {
         let mut domain_name: Option<Vec<u16>> = domain_name.map(|domain_name| str_to_wstr(domain_name));
         let domain_name = domain_name.as_mut()
@@ -255,29 +273,8 @@ impl<'r> SIDRef<'r> {
 
 impl<'r> fmt::Debug for SIDRef<'r> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sid_str = match self.lookup_account_name(None) {
-            Ok((name, mut domain_name)) => {
-                if !domain_name.is_empty() {
-                    domain_name.push('\\');   
-                    domain_name.push_str(&name);   
-                    domain_name
-                } else {
-                    name
-                }
-            },
-            Err(_) => {
-                match self.to_string() {
-                    Ok(s) => {
-                        s
-                    },
-                    Err(_) => {
-                        format!( "{:?}", &self.0 )
-                    }
-                }
-            }
-        };
-
-        f.write_fmt(format_args!("SIDRef({:?})", &sid_str))
+        let s = self.to_account_name_or_sid().unwrap_or_else(|_| String::new());
+        f.write_fmt(format_args!("SIDRef({:?})", s))
     }
 }
 
@@ -583,6 +580,10 @@ impl SID {
         self.as_ref().to_string()
     }
 
+    pub fn to_account_name_or_sid( &self ) -> Result<String> {
+        self.as_ref().to_account_name_or_sid()
+    }
+
     pub fn get_domain_of( &self ) -> Result<Self> {
         self.as_ref().get_domain_of()
     }
@@ -711,6 +712,20 @@ impl<'r> VSID<'r> {
             },
             Self::Value(v) => {
                 v.to_string()
+            }
+        }
+    }
+
+    pub fn to_account_name_or_sid(&self) -> Result<String> {
+        match self {
+            Self::None => {
+                Ok(String::new())
+            },
+            Self::Ptr(p) => {
+                p.to_account_name_or_sid()
+            },
+            Self::Value(v) => {
+                v.to_account_name_or_sid()
             }
         }
     }
