@@ -36,7 +36,9 @@ use crate::utils::DebugIdent;
 pub struct ACCESS_MASK(pub u32);
 
 impl ACCESS_MASK {
-    pub const fn contains(&self, other: Self) -> bool {
+    #[inline]
+    pub fn contains(&self, other: impl IntoAccessMask) -> bool {
+        let other = other.into_access_mask();
         self.0 & other.0 == other.0
     }
 }

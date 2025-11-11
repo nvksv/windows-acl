@@ -614,21 +614,22 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator for ACLListEnt
     fn next(&mut self) -> Result<Option<Self::Item>> {
         if let Some(entry) = &self.entry {
             let sid = entry.sid.as_ref().unwrap();
+            
             while let Some(item) = self.inner.next()? {
                 if item.is_match( sid, &self.filter ) {
                     continue;
                 }
                 return Ok(Some(item));
             }
+
+            if let Some(entry) = self.entry.take() {
+                return Ok(Some(entry));
+            }
+
+            Ok(None)
         } else {
-            return self.inner.next();
+            self.inner.next()
         }
-
-        if let Some(entry) = self.entry.take() {
-            return Ok(Some(entry));
-        }
-
-        Ok(None)
     }
 }
 

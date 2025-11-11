@@ -281,6 +281,12 @@ impl ACEFilter {
         }
     }
 
+    /// Returns an `ACLEntry` object with default values.
+    #[inline]
+    pub fn all() -> Self {
+        Self::new()
+    }
+
     #[inline]
     pub fn never() -> Self {
         Self {
@@ -417,6 +423,18 @@ impl IntoOptionalACEFilter for ACEFilter {
         Some(self)
     }
 }
+
+impl IntoOptionalACEFilter for bool {
+    #[inline]
+    fn into_optional_mask( self ) -> Option<ACEFilter> {
+        if self {
+            Some(ACEFilter::all())
+        } else {
+            Some(ACEFilter::never())
+        }
+    }
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

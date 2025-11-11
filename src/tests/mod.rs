@@ -658,7 +658,7 @@ fn my_test() {
 
     let path = path_obj.to_str().unwrap();
 
-    SecurityDescriptor::take_ownership_from_file_path(path, SE_FILE_OBJECT).expect("take_ownership_from_path");
+    SecurityDescriptor::take_ownership_from_file_path(path).expect("take_ownership_from_path");
 
     let mut sd = SecurityDescriptor::from_file_path(path, false).expect("from_file_path");
     println!("1) sd = {:#?}", &sd);
