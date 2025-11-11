@@ -2,9 +2,7 @@
 #![cfg(windows)]
 
 mod types;
-mod sid;
-mod privilege;
-mod windows_security_descriptor;
+mod winapi;
 mod acl_kind;
 mod ace;
 mod acl;
@@ -15,21 +13,19 @@ pub use acl_kind::{ACLKind, DACL, SACL};
 pub use security_descriptor::{SecurityDescriptor};
 pub use ace::{ACE, ACEFilter, ACEMask, IntoOptionalACEFilter, IntoOptionalACEMask};
 pub use acl::{ACL, ACLEntryIterator, ACLVecList};
-pub use sid::{SID, SIDRef, VSID};
-
+pub use winapi::sid::{SID, SIDRef, VSID};
 pub use types::{AceType, ACCESS_MASK, IntoAccessMask};
 
 pub mod helper {
-    pub use crate::utils::{current_user_account_name, DebugIdent, DebugUnpretty};
-    pub use crate::types::{
-        AccessMaskIdents, AceFlagsIdents, AceFlagsFullIdents, AceFlagsShortIdents, FileAccessRightsFullIdents, FileAccessRightsShortIdents,
-        AceFlagsRepresenter, 
+    pub use crate::{
+        utils::{current_user_account_name, DebugIdent, DebugUnpretty},
+        types::{FileAccessRightsRepresenter, FileAccessRightsFullIdents, FileAccessRightsShortIdents, AccessMaskIdents, AceFlagsFullIdents, AceFlagsShortIdents, AceFlagsRepresenter},
     };
 }
 
 pub mod lowlevel {
-    pub use crate::windows_security_descriptor::WindowsSecurityDescriptor as SecurityDescriptor;
-    pub use crate::privilege::Privilege;
+    pub use crate::winapi::security_descriptor::WindowsSecurityDescriptor as SecurityDescriptor;
+    pub use crate::winapi::privilege::Privilege;
 }
 
 /// Reexport

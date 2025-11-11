@@ -85,7 +85,7 @@ fn run_ps_script(file_name: &str) -> bool {
 }
 
 fn string_sid_by_user(user: &str) -> String {
-    let user_sid = SID::from_account_name(user, None).unwrap();
+    let (user_sid, _user_domain) = SID::from_account_name(user, None).unwrap();
     let user_string_sid = user_sid.to_string().unwrap();
 
     user_string_sid
@@ -160,7 +160,7 @@ impl SIDs {
             current_domain,
             guest,
             world,
-            test: SID::from_account_name("test", Some("ksv-auto")).unwrap(),
+            test: SID::from_account_name("test", Some("ksv-auto")).unwrap().0,
         }
     }
 }

@@ -29,10 +29,12 @@ use fallible_iterator::FallibleIterator;
 use crate::{
     acl_kind::{ACLKind, IsACLKind, DACL, SACL},
     ace::{ACE, ACEFilter, AVERAGE_ACE_SIZE, MAX_ACL_SIZE, IntoOptionalACEFilter}, 
-    sid::{SIDRef, VSID, IntoVSID}, 
     types::*, 
     utils::{as_ppvoid_mut, vec_as_pacl_mut},
-    windows_security_descriptor::WindowsInheritedFrom,
+    winapi::{
+        security_descriptor::WindowsInheritedFrom,
+        sid::{SIDRef, IntoVSID}, 
+    },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -143,6 +145,7 @@ pub struct ACL<'r, K: ACLKind> {
 }
  
 impl<'r, K: ACLKind> ACL<'r, K> {
+    /// Warning: pacl may be NULL
     pub fn from_pacl( pacl: *const _ACL ) -> Self {
         Self {
             pacl,
@@ -158,6 +161,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
         }
     }
 
+    /// Warning: may return NULL
     pub fn pacl(&self) -> *const _ACL {
         self.pacl
     }
@@ -252,8 +256,7 @@ impl<K: ACLKind> ACLVecList<K> {
             MAX_ACL_SIZE 
         );
 
-        let mut buffer = Vec::with_capacity( max_size as usize );
-        unsafe { buffer.set_len(max_size as usize) };
+        let mut buffer = [0u8].repeat(max_size as usize );
 
         //
 
@@ -269,7 +272,7 @@ impl<K: ACLKind> ACLVecList<K> {
         while let Some(entry) = iter.next()? {
             match K::write_ace( pacl, &entry ) {
                 Ok(()) => {},
-                Err(err) if err.code() != HRESULT::from_nt(STATUS_ALLOTTED_SPACE_EXCEEDED.0) => {
+                Err(err) if err.code() == HRESULT::from_nt(STATUS_ALLOTTED_SPACE_EXCEEDED.0) => {
                     let additional = MAX_ACL_SIZE.saturating_sub(buffer.len() as u16);
                     if additional == 0 {
                         return Err(err);
@@ -295,7 +298,7 @@ impl<K: ACLKind> ACLVecList<K> {
             )?
         };
 
-        let buffer_range = &buffer[..].as_ptr_range();
+        let buffer_range = buffer[..].as_ptr_range();
 
         let buffer_start = buffer_range.start as *const u8;
         let acl_start = pacl as *const u8;
@@ -306,7 +309,10 @@ impl<K: ACLKind> ACLVecList<K> {
             return Err(Error::empty());
         }
 
-        let acl_size =  unsafe { acl_end.offset_from_unsigned(acl_start) }.try_into().map_err(|_| Error::empty())?;
+        let acl_size =  unsafe { acl_end.offset_from_unsigned(acl_start) }
+            .try_into().map_err(|_| Error::empty())?;
+
+        debug_assert!( acl_size as usize <= buffer.capacity() );
         unsafe { buffer.set_len(acl_size as usize) };
 
         //
@@ -380,6 +386,8 @@ impl<'r> FallibleIterator for AceHdrIterator<'r> {
         if self.idx >= self.ace_count {
             return Ok(None);
         }
+
+        debug_assert!( !self.acl.is_null() );
 
         let mut hdr: *mut ACE_HEADER = null_mut();
         unsafe { 

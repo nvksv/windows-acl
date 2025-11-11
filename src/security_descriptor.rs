@@ -53,8 +53,13 @@ use windows::{
 use crate::{
     ace::ACE, acl::{
         ACEWithInheritedFromIterator, ACLEntryIterator, ACLVecList, AceEntryIterator, ACL
-    }, acl_kind::{ACLKind, DACL, SACL}, sid::{SIDRef, VSID}, types::*, utils::DebugUnpretty, windows_security_descriptor::{
-        SDSource, WindowsSecurityDescriptor,
+    }, 
+    acl_kind::{ACLKind, DACL, SACL}, 
+    winapi::sid::{SIDRef, VSID}, 
+    types::*, 
+    utils::DebugUnpretty, 
+    winapi::security_descriptor::{
+        SecurityDescriptorSource, WindowsSecurityDescriptor,
     }, SID 
     
 };
@@ -64,12 +69,26 @@ use crate::{
 /// `SD` represents the access control list (discretionary or oth discretionary/system) for a named object
 pub struct SecurityDescriptor {
     descriptor: WindowsSecurityDescriptor,
-    source: SDSource,
-    object_type: ObjectType,
+    source: SecurityDescriptorSource,
     include_sacl: bool,
 }
 
 impl SecurityDescriptor {
+    pub fn from_source(
+        source: SecurityDescriptorSource,
+        include_sacl: bool,
+    ) -> Result<Self> {
+        let mut descriptor = WindowsSecurityDescriptor::new();
+        descriptor.read(&source, include_sacl)?;
+        Ok(
+            Self {
+                descriptor,
+                source,
+                include_sacl,
+            }
+        )
+    }
+
     /// Creates an `SecurityDescriptor` object from a specified object handle.
     ///
     /// # Arguments
@@ -89,16 +108,15 @@ impl SecurityDescriptor {
         object_type: SE_OBJECT_TYPE,
         include_sacl: bool,
     ) -> Result<Self> {
-        let source = SDSource::Handle(handle);
+        let source = SecurityDescriptorSource::from_handle(handle, object_type);
 
         let mut descriptor = WindowsSecurityDescriptor::new();
-        descriptor.read(&source, object_type, include_sacl)?;
+        descriptor.read(&source, include_sacl)?;
 
         Ok(
             Self {
                 descriptor,
                 source,
-                object_type: object_type.into(),
                 include_sacl,
             }
         )
@@ -109,14 +127,13 @@ impl SecurityDescriptor {
         object_type: SE_OBJECT_TYPE,
         include_sacl: bool,
     ) -> Self {
-        let source = SDSource::Handle(handle);
+        let source = SecurityDescriptorSource::from_handle(handle, object_type);
 
         let descriptor = WindowsSecurityDescriptor::new();
 
         Self {
             descriptor,
             source,
-            object_type: object_type.into(),
             include_sacl,
         }
     }
@@ -224,16 +241,15 @@ impl SecurityDescriptor {
         object_type: SE_OBJECT_TYPE,
         include_sacl: bool,
     ) -> Result<Self> {
-        let source = SDSource::Path(path.to_owned());
+        let source = SecurityDescriptorSource::from_path(path, object_type);
 
         let mut descriptor = WindowsSecurityDescriptor::new();
-        descriptor.read(&source, object_type, include_sacl)?;
+        descriptor.read(&source, include_sacl)?;
 
         Ok(
             Self {
                 descriptor,
                 source,
-                object_type: object_type.into(),
                 include_sacl,
             }
         )
@@ -244,14 +260,13 @@ impl SecurityDescriptor {
         object_type: SE_OBJECT_TYPE,
         include_sacl: bool,
     ) -> Self {
-        let source = SDSource::Path(path.to_owned());
+        let source = SecurityDescriptorSource::from_path(path, object_type);
 
         let descriptor = WindowsSecurityDescriptor::new();
         
         Self {
             descriptor,
             source,
-            object_type: object_type.into(),
             include_sacl,
         }
     }
@@ -335,7 +350,7 @@ impl SecurityDescriptor {
 
     /// Returns the `ObjectType` of the target named object path as specified during the creation of the `ACL` object
     pub fn object_type(&self) -> ObjectType {
-        self.object_type
+        self.source.object_type().into()
     }
 
     //
@@ -401,7 +416,6 @@ impl SecurityDescriptor {
 
         let inherited_from = self.descriptor.get_inheritance_source::<DACL>(
             &self.source,
-            self.object_type.into(),
             dacl,
         )?;
 
@@ -470,7 +484,6 @@ impl SecurityDescriptor {
 
         let inherited_from = self.descriptor.get_inheritance_source::<SACL>(
             &self.source,
-            self.object_type.into(),
             sacl,
         )?;
 
@@ -513,7 +526,6 @@ impl SecurityDescriptor {
     pub fn reload(&mut self) -> Result<()> {
         self.descriptor.read(
             &self.source,
-            self.object_type().into(),
             self.include_sacl,
         )?;
         Ok(())
@@ -522,17 +534,16 @@ impl SecurityDescriptor {
     pub fn write( &mut self ) -> Result<()> {
         self.descriptor.write(
             &self.source,
-            self.object_type.into(),
             self.include_sacl,
         )
     }
 
     //
 
-    pub fn take_ownership_from_file_path<'s>( path: &str, object_type: SE_OBJECT_TYPE ) -> Result<()> {
-        let source = SDSource::Path(path.to_owned());
+    pub fn take_ownership_from_file_path<'s>( path: &str ) -> Result<()> {
+        let source = SecurityDescriptorSource::from_file_path(path);
         let current_user = SID::current_user()?;
-        WindowsSecurityDescriptor::take_ownership(&source, object_type, current_user.as_ref())
+        WindowsSecurityDescriptor::take_ownership(&source, current_user.as_ref())
     }
 
     //

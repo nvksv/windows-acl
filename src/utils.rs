@@ -57,7 +57,7 @@ use windows::{
 use crate::{
     acl_kind::{DACL, SACL},
     ace::ACE,
-    sid::VSID,
+    winapi::sid::VSID,
     types::{AceType, ACCESS_MASK}, ACLKind,
 };
 

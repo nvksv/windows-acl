@@ -37,7 +37,10 @@ pub struct SIDRef<'r>( &'r [u8] );
 
 impl<'r> SIDRef<'r> {
     pub fn from_psid( psid: PSID ) -> Result<Option<Self>> {
-        if psid.is_invalid() || !unsafe { IsValidSid(psid) }.as_bool() {
+        if psid.is_invalid() {
+            return Ok(None);
+        }
+        if !unsafe { IsValidSid(psid) }.as_bool() {
             return Ok(None);
         }
 
@@ -57,8 +60,7 @@ impl<'r> SIDRef<'r> {
         let psid = self.psid();
         let sid_size = self.len();
 
-        let mut sid: Vec<u8> = Vec::with_capacity(sid_size as usize);
-        unsafe { sid.set_len(sid_size as usize) };
+        let mut sid= [0_u8].repeat(sid_size as usize);
 
         unsafe { 
             CopySid(
@@ -168,16 +170,22 @@ impl<'r> SIDRef<'r> {
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
     pub fn to_string( &self ) -> Result<String> {
+        let psid = self.psid();
+        if psid.is_invalid() {
+            return Err(Error::empty());
+        }
+
         let mut raw_string_sid: PWSTR = PWSTR::null();
-        unsafe { ConvertSidToStringSidW( self.psid(), &mut raw_string_sid) }?;
+        unsafe { ConvertSidToStringSidW( psid, &mut raw_string_sid) }?;
         if raw_string_sid.is_null() {
             return Err(Error::empty());
         }
 
-        let string_sid = unsafe { raw_string_sid.to_string() }
-            .map_err(|_| Error::empty())?;
+        let string_sid = unsafe { raw_string_sid.to_string() };
 
         unsafe { LocalFree(Some(HLOCAL(raw_string_sid.as_ptr() as *mut c_void))) };
+
+        let string_sid = string_sid.map_err(|_| Error::empty())?;
 
         Ok(string_sid)
     }
@@ -305,12 +313,15 @@ impl SID {
     }
 
     pub fn from_psid( psid: PSID ) -> Result<Self> {
+        if psid.is_invalid() {
+            return Err(Error::empty());
+        }
         if !unsafe { IsValidSid(psid) }.as_bool() {
             return Err(Error::empty());
         }
 
         let sid_size = unsafe { GetLengthSid(psid) };
-        let mut sid: Vec<u8> = Vec::with_capacity(sid_size as usize);
+        let mut sid: Vec<u8> = [0_u8].repeat(sid_size as usize);
 
         unsafe { 
             CopySid(
@@ -353,7 +364,7 @@ impl SID {
             return Err(Error::empty());
         }
 
-        let mut sid = Vec::with_capacity(sid_size as usize);
+        let mut sid = [0_u8].repeat(sid_size as usize);
 
         unsafe {
             CreateWellKnownSid(
@@ -364,6 +375,7 @@ impl SID {
             )        
         }?;
 
+        assert!( sid_size as usize <= sid.capacity() );
         unsafe { sid.set_len(sid_size as usize) };
 
         Ok(Self {
@@ -456,7 +468,7 @@ impl SID {
     ///
     /// **Note**: If the error code is 0, `GetLastError()` returned `ERROR_INSUFFICIENT_BUFFER` after invoking `LookupAccountNameW` or
     ///         the `sid_size` is 0.
-    pub fn from_account_name(name: &str, system: Option<&str>) -> Result<Self> {
+    pub fn from_account_name(name: &str, system: Option<&str>) -> Result<(Self, String)> {
         let mut name: Vec<u16> = str_to_wstr(name);
         let name = PWSTR::from_raw(name.as_mut_ptr());
 
@@ -494,8 +506,8 @@ impl SID {
             return Err(Error::empty());
         }
 
-        let mut sid: Vec<u8> = Vec::with_capacity(sid_size as usize);
-        let mut domain_name: Vec<u8> = Vec::with_capacity((domain_name_size as usize) * mem::size_of::<u16>());
+        let mut sid = [0_u8].repeat(sid_size as usize);
+        let mut domain_name = [0_u16].repeat(domain_name_size as usize);
 
         unsafe {
             LookupAccountNameW(
@@ -509,11 +521,22 @@ impl SID {
             )
         }?;
 
+        assert!( sid_size as usize <= sid.capacity() );
         unsafe { sid.set_len(sid_size as usize) };
 
-        Ok(Self {
+        let domain_name = if domain_name_size > 0 {
+            let domain_name_wstr = PWSTR::from_raw(domain_name.as_mut_ptr());
+            unsafe { domain_name_wstr.to_string() }
+                .map_err(|_| Error::empty())?
+        } else {
+            String::new()
+        };
+
+        let sid = Self {
             sid
-        })
+        };
+
+        Ok((sid, domain_name))
     }
 
     /// Converts a string representation of a SID into a raw SID. The returned raw SID is contained in a `Vec<u8>` object.
@@ -543,6 +566,7 @@ impl SID {
 
         unsafe { LocalFree(Some(HLOCAL(psid.0))) };
 
+        assert!( size as usize <= sid.capacity() );
         unsafe { sid.set_len(size as usize) };
 
         Ok(Self {
@@ -689,7 +713,8 @@ impl<'r> VSID<'r> {
     }
 
     pub unsafe fn from_psid_or_empty( psid: PSID ) -> Self {
-        Self::from_psid(psid).unwrap_or(Self::None)
+        unsafe { Self::from_psid(psid) }
+            .unwrap_or(Self::None)
     }
 
     pub fn from_str(string_sid: &str) -> Result<VSID<'static>> {
@@ -697,9 +722,9 @@ impl<'r> VSID<'r> {
         Ok(MaybePtr::Value(sid))
     }
 
-    pub fn from_account_name(name: &str, system: Option<&str>) -> Result<VSID<'static>> {
-        let sid = SID::from_account_name(name, system)?;
-        Ok(MaybePtr::Value(sid))
+    pub fn from_account_name(name: &str, system: Option<&str>) -> Result<(VSID<'static>, String)> {
+        let (sid, domain_name) = SID::from_account_name(name, system)?;
+        Ok((MaybePtr::Value(sid), domain_name))
     }
 
     pub fn to_string(&self) -> Result<String> {
