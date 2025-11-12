@@ -190,10 +190,10 @@ impl WindowsSecurityDescriptor {
         self.free_descriptor();
 
         let mut flags =
-            DACL_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION;
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION;
 
         if include_sacl {
-            flags |= SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+            flags |= SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
         };
 
         let mut pDacl: *mut _ACL = null_mut();
@@ -239,9 +239,16 @@ impl WindowsSecurityDescriptor {
         }
         
         self.dacl = MaybeSet::NotSet(pDacl);
-        self.sacl = MaybeSet::NotSet(pSacl);
+        if include_sacl {
+            self.sacl = MaybeSet::NotSet(pSacl);
+        }
         self.owner = MaybeSet::NotSet(pOwner);
         self.group = MaybeSet::NotSet(pGroup);
+
+        self.read_dacl_is_protected_from_descriptor()?;
+        if include_sacl {
+            self.read_sacl_is_protected_from_descriptor()?;
+        }
 
         Ok(())
     }
