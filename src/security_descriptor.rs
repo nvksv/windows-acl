@@ -12,7 +12,7 @@ use core::{
     hash,
 };
 use std::{
-    os::windows::io::RawHandle
+    os::windows::io::RawHandle, path::Path
 };
 use windows::{
     core::{
@@ -189,7 +189,7 @@ impl SecurityDescriptor {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_path(
-        path: &str,
+        path: &Path,
         object_type: SE_OBJECT_TYPE,
     ) -> Self {
         Self::from_source(
@@ -209,7 +209,7 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_file_path(path: &str) -> Self {
+    pub fn from_file_path(path: &Path) -> Self {
         Self::from_path(path, SE_FILE_OBJECT)
     }
 
@@ -225,7 +225,7 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_object_path(path: &str) -> Self {
+    pub fn from_object_path(path: &Path) -> Self {
         Self::from_path(path, SE_KERNEL_OBJECT)
     }
 
@@ -242,7 +242,7 @@ impl SecurityDescriptor {
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
     pub fn from_registry_path(
-        path: &str,
+        path: &Path,
         is_wow6432key: bool,
     ) -> Self {
         if is_wow6432key {
@@ -550,7 +550,7 @@ impl SecurityDescriptor {
     //
 
     pub fn get_effective_access_rigths( &self, sid: SIDRef<'_> ) -> Result<ACCESS_MASK> {
-        let access_mask = self.descriptor.get_effective_access_rigths(sid)?;
+        let access_mask = self.descriptor.get_effective_access_rights(sid)?;
         Ok(ACCESS_MASK(access_mask))
     }
 

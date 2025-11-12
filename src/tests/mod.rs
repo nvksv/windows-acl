@@ -6,14 +6,10 @@ use crate::{
     winapi::api::ErrorExt,
 };
 use std::{
-    env::current_exe,
-    fs::{File, OpenOptions},
-    os::windows::{
+    env::current_exe, ffi::{OsStr, OsString}, fs::{File, OpenOptions}, os::windows::{
         fs::OpenOptionsExt,
         io::AsRawHandle,
-    },
-    path::PathBuf,
-    process::Command,
+    }, path::PathBuf, process::Command, str::FromStr
 };
 use core::ffi::c_void;
 use windows::{
@@ -86,7 +82,9 @@ fn run_ps_script(file_name: &str) -> bool {
 }
 
 fn string_sid_by_user(user: &str) -> String {
-    let (user_sid, _user_domain) = SID::from_account_name(user, None).unwrap();
+    let user = OsString::from_str(user).unwrap();
+
+    let (user_sid, _user_domain) = SID::from_account_name(&user, None).unwrap();
     let user_string_sid = user_sid.to_string().unwrap();
 
     user_string_sid
@@ -161,7 +159,7 @@ impl SIDs {
             current_domain,
             guest,
             world,
-            test: SID::from_account_name("test", Some("ksv-auto")).unwrap().0,
+            test: SID::from_account_name(&OsString::from("test"), Some(&OsString::from("ksv-auto"))).unwrap().0,
         }
     }
 }
@@ -171,13 +169,11 @@ impl SIDs {
 fn query_dacl_unit_test() {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap_or_default();
-    path_obj.push("query_test");
-    assert!(path_obj.exists());
+    let mut path = support_path().unwrap_or_default();
+    path.push("query_test");
+    assert!(path.exists());
 
-    let path = path_obj.to_str().unwrap();
-
-    let mut sd = SecurityDescriptor::from_file_path(path);
+    let mut sd = SecurityDescriptor::from_file_path(&path);
     sd.read().unwrap();
     println!("sd = {:#?}", &sd);
 
@@ -237,13 +233,11 @@ fn query_dacl_unit_test() {
 fn query_sacl_unit_test() {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap();
-    path_obj.push("query_sacl_test");
-    assert!(path_obj.exists());
+    let mut path = support_path().unwrap();
+    path.push("query_sacl_test");
+    assert!(path.exists());
 
-    let path = path_obj.to_str().unwrap();
-
-    let mut sd = SecurityDescriptor::from_file_path(path);
+    let mut sd = SecurityDescriptor::from_file_path(&path);
     sd.enable_sacl(true);
     match sd.read() {
         Ok(obj) => obj,
@@ -280,15 +274,13 @@ fn query_sacl_unit_test() {
 fn add_and_remove_dacl_allow(use_handle: bool) {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap();
-    path_obj.push(if use_handle {
+    let mut path = support_path().unwrap();
+    path.push(if use_handle {
         "dacl_allow_handle"
     } else {
         "dacl_allow_file"
     });
-    assert!(path_obj.exists());
-
-    let path = path_obj.to_str().unwrap();
+    assert!(path.exists());
 
     // NOTE(andy): create() opens for write only or creates new if path doesn't exist. Since we know
     //             that the path exists (see line 289), this will attempt to open for write, which
@@ -302,11 +294,11 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     let mut sd = if use_handle {
         file = OpenOptions::new()
             .access_mode(GENERIC_READ.0 | WRITE_DAC.0 )
-            .open(path)
+            .open(&path)
             .unwrap();
         SecurityDescriptor::from_file_raw_handle(file.as_raw_handle())
     } else {
-        SecurityDescriptor::from_file_path(path)
+        SecurityDescriptor::from_file_path(&path)
     };
     sd.read().unwrap();
 
@@ -324,7 +316,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     //
 
     // NOTE(andy): Our explicit allow entry should make this pass now
-    assert!(File::create(path).is_ok());
+    assert!(File::create(&path).is_ok());
 
     let mut entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
@@ -381,30 +373,28 @@ fn add_and_remove_dacl_allow_handle_test() {
 fn add_and_remove_dacl_deny(use_handle: bool) {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap_or_default();
-    path_obj.push(if use_handle {
+    let mut path = support_path().unwrap_or_default();
+    path.push(if use_handle {
         "dacl_deny_handle"
     } else {
         "dacl_deny_file"
     });
-    assert!(path_obj.exists());
-
-    let path = path_obj.to_str().unwrap_or("");
-    assert_ne!(path.len(), 0);
+    assert!(path.exists());
+    assert_ne!(path.as_os_str().len(), 0);
 
     // NOTE(andy): create() opens for write only or creates new if path doesn't exist. Since we know
     //             that the path exists (see line 375), this will attempt to open for write, which
     //             should succeed
     let create_res = OpenOptions::new()
         .access_mode(GENERIC_WRITE.0 | WRITE_DAC.0 )
-        .open(path);
+        .open(&path);
     assert!(create_res.is_ok());
     let file = create_res.unwrap();
 
     let mut sd = if use_handle {
         SecurityDescriptor::from_file_raw_handle(file.as_raw_handle())
     } else {
-        SecurityDescriptor::from_file_path(path)
+        SecurityDescriptor::from_file_path(&path)
     };
     sd.read().unwrap();
 
@@ -422,7 +412,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     //
 
     // NOTE(andy): Since we added a deny entry for WRITE, this should fail
-    assert!(File::create(path).is_err());
+    assert!(File::create(&path).is_err());
 
     let mut entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
@@ -453,7 +443,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
 
     //
 
-    assert!(File::open(path).is_ok());
+    assert!(File::open(&path).is_ok());
 
     entries = sd.dacl().all().unwrap_or(Vec::new());
     assert_ne!(entries.len(), 0);
@@ -482,14 +472,13 @@ fn add_and_remove_dacl_deny_handle_test() {
 fn add_remove_sacl_mil() {
     let low_mil_sid = SID::from_str("S-1-16-4096").unwrap();
 
-    let mut path_obj = support_path().unwrap_or_default();
-    path_obj.push("sacl_mil_file");
-    assert!(path_obj.exists());
+    let mut path = support_path().unwrap_or_default();
+    path.push("sacl_mil_file");
+    assert!(path.exists());
 
-    let path = path_obj.to_str().unwrap_or("");
-    assert_ne!(path.len(), 0);
+    assert_ne!(path.as_os_str().len(), 0);
 
-    let mut sd = SecurityDescriptor::from_file_path(path);
+    let mut sd = SecurityDescriptor::from_file_path(&path);
     sd.enable_sacl(true);
     sd.read().unwrap();
 
@@ -538,14 +527,13 @@ fn add_remove_sacl_mil() {
 fn add_remove_sacl_audit() {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap_or_default();
-    path_obj.push("sacl_audit_file");
-    assert!(path_obj.exists());
+    let mut path = support_path().unwrap_or_default();
+    path.push("sacl_audit_file");
+    assert!(path.exists());
 
-    let path = path_obj.to_str().unwrap_or("");
-    assert_ne!(path.len(), 0);
+    assert_ne!(path.as_os_str().len(), 0);
 
-    let mut sd = SecurityDescriptor::from_file_path(path);
+    let mut sd = SecurityDescriptor::from_file_path(&path);
     sd.enable_sacl(true);
     sd.read().unwrap();
 
@@ -594,13 +582,11 @@ fn add_remove_sacl_audit() {
 fn acl_get_and_remove_test() {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap_or_default();
-    path_obj.push("acl_get_and_remove");
-    assert!(path_obj.exists());
+    let mut path = support_path().unwrap_or_default();
+    path.push("acl_get_and_remove");
+    assert!(path.exists());
 
-    let path = path_obj.to_str().unwrap();
-
-    let mut sd = SecurityDescriptor::from_file_path(path);
+    let mut sd = SecurityDescriptor::from_file_path(&path);
     sd.enable_sacl(true);
     sd.read().unwrap();
 
@@ -665,15 +651,13 @@ fn acl_get_and_remove_test() {
 fn my_test() {
     let sids = SIDs::new();
 
-    let mut path_obj = support_path().unwrap_or_default();
-    path_obj.push("query_test");
-    assert!(path_obj.exists());
+    let mut path = support_path().unwrap_or_default();
+    path.push("query_test");
+    assert!(path.exists());
 
-    let path = path_obj.to_str().unwrap();
+    let mut sd = SecurityDescriptor::from_file_path(&path);
 
-    SecurityDescriptor::take_ownership_from_file_path(path).expect("take_ownership_from_path");
-
-    let mut sd = SecurityDescriptor::from_file_path(path);
+    sd.take_ownership().expect("take_ownership_from_path");
     sd.read().expect("from_file_path");
     
     println!("1) sd = {:#?}", &sd);

@@ -8,7 +8,10 @@ use core::{
     marker::PhantomData,
     cmp::min,
 };
-use std::ptr::null;
+use std::{
+    ptr::null,
+    ffi::OsString,
+};
 use windows::{
     core::{
         Error, Result, HRESULT,
@@ -744,7 +747,7 @@ pub struct ACEWithInheritedFromIterator<'r, K: ACLKind> {
 pub struct ACEWithInheritedFrom<'r, K: ACLKind> {
     pub ace: ACE<'r, K>,
     pub generation_gap: i32,
-    pub ancestor_name: Option<String>,
+    pub ancestor_name: Option<OsString>,
 }
 
 impl<'r, K: ACLKind> ACEWithInheritedFromIterator<'r, K> {

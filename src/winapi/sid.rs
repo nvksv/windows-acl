@@ -1,16 +1,18 @@
 #![allow(non_snake_case)]
 
 use core::{
-    ffi::c_void, fmt, mem, ptr::null_mut, slice, cmp, hash
+    ffi::c_void, fmt, mem, ptr::null_mut, slice, cmp, hash, fmt::Debug,
 };
-use std::fmt::Debug;
+use std::{
+    ffi::{OsStr, OsString}, str::FromStr,
+};
 use crate::{
-    utils::{str_to_wstr, DebugUnpretty, MaybePtr},
+    utils::{DebugUnpretty, MaybePtr, u16cstr_as_pcwstr, u16str_as_pwstr, pwstr_as_u16str},
     winapi::api::ErrorExt,
 };
 use windows::{
     core::{
-        Error, Result, HRESULT, PWSTR  
+        Error, Result, HRESULT, PWSTR, PCWSTR,
     },
     Win32::{
         Foundation::{
@@ -30,6 +32,7 @@ use windows::{
             },
     },
 };
+use ::widestring::{U16CString, U16CStr, U16String, U16Str};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -91,12 +94,12 @@ impl<'r> SIDRef<'r> {
         Ok(VSID::Value(sid))
     }
 
-    pub fn to_account_name_or_sid( &self ) -> Result<String> {
+    pub fn to_account_name_or_sid( &self ) -> Result<OsString> {
         match self.lookup_account_name(None) {
             Ok((name, mut domain_name)) => {
                 let s = if !domain_name.is_empty() {
-                    domain_name.push('\\');   
-                    domain_name.push_str(&name);   
+                    domain_name.push("\\");   
+                    domain_name.push(&name);   
                     domain_name
                 } else {
                     name
@@ -104,16 +107,17 @@ impl<'r> SIDRef<'r> {
                 Ok(s)
             },
             Err(_) => {
-                self.to_string()
+                self.to_os_string()
             }
         }
     }
 
-    pub fn lookup_account_name( &self, domain_name: Option<&str> ) -> Result<(String, String)> {
-        let mut domain_name: Option<Vec<u16>> = domain_name.map(|domain_name| str_to_wstr(domain_name));
-        let domain_name = domain_name.as_mut()
-            .map(|domain_name| PWSTR::from_raw(domain_name.as_mut_ptr()))
-            .unwrap_or(PWSTR::null());
+    pub fn lookup_account_name( &self, domain_name: Option<&OsStr> ) -> Result<(OsString, OsString)> {
+        let domain_name = domain_name
+            .map(|domain_name| U16CString::from_os_str_truncate(domain_name));
+        let domain_name = domain_name.as_ref()
+            .map(|domain_name| u16cstr_as_pcwstr(domain_name))
+            .unwrap_or(PCWSTR::null());
 
         let mut name_len: u32 = 0;
         let mut referenced_domain_name_len: u32 = 0;
@@ -139,11 +143,11 @@ impl<'r> SIDRef<'r> {
             },
         };
 
-        let mut name = [0_u16].repeat( (name_len as usize) + 1 );
-        let mut referenced_domain_name = [0_u16].repeat( (referenced_domain_name_len as usize) + 1 );
+        let mut name_vec = vec![0_u16; name_len as usize];
+        let mut referenced_domain_name_vec = vec![0_u16; referenced_domain_name_len as usize];
 
-        let name = PWSTR::from_raw(name.as_mut_ptr());
-        let referenced_domain_name = PWSTR::from_raw(referenced_domain_name.as_mut_ptr());
+        let name = PWSTR::from_raw(name_vec.as_mut_ptr());
+        let referenced_domain_name = PWSTR::from_raw(referenced_domain_name_vec.as_mut_ptr());
 
         unsafe {
             LookupAccountSidW(
@@ -157,10 +161,8 @@ impl<'r> SIDRef<'r> {
             )
         }?;
 
-        let name = unsafe { name.to_string() }
-            .map_err(|_| Error::empty())?;
-        let referenced_domain_name = unsafe { referenced_domain_name.to_string() }
-            .map_err(|_| Error::empty())?;
+        let name = U16CString::from_vec_truncate(name_vec).to_os_string();
+        let referenced_domain_name = U16CString::from_vec_truncate(referenced_domain_name_vec).to_os_string();
 
         Ok((name, referenced_domain_name))
     }
@@ -172,25 +174,34 @@ impl<'r> SIDRef<'r> {
     ///
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
-    pub fn to_string( &self ) -> Result<String> {
+    pub fn to_os_string( &self ) -> Result<OsString> {
         let psid = self.psid();
         if psid.is_invalid() {
             return Err(Error::empty());
         }
 
         let mut raw_string_sid: PWSTR = PWSTR::null();
-        unsafe { ConvertSidToStringSidW( psid, &mut raw_string_sid) }?;
+        unsafe { 
+            ConvertSidToStringSidW( 
+                psid, 
+                &mut raw_string_sid
+            ) 
+        }?;
         if raw_string_sid.is_null() {
             return Err(Error::empty());
         }
 
-        let string_sid = unsafe { raw_string_sid.to_string() };
+        let string_sid = unsafe { &* pwstr_as_u16str(raw_string_sid) };
+        let string_sid = string_sid.to_os_string();
 
         unsafe { LocalFree(Some(HLOCAL(raw_string_sid.as_ptr() as *mut c_void))) };
 
-        let string_sid = string_sid.map_err(|_| Error::empty())?;
-
         Ok(string_sid)
+    }
+
+    pub fn to_string( &self ) -> Result<String> {
+        let s = self.to_os_string()?;
+        Ok(s.to_string_lossy().to_string())
     }
 
     pub fn get_domain_of( &self ) -> Result<SID> {
@@ -217,7 +228,7 @@ impl<'r> SIDRef<'r> {
             return Err(Error::empty());
         }
 
-        let mut domain_sid = Vec::with_capacity(domain_sid_size as usize);
+        let mut domain_sid = vec![0_u8; domain_sid_size as usize];
 
         unsafe {
             GetWindowsAccountDomainSid(
@@ -284,7 +295,9 @@ impl<'r> SIDRef<'r> {
 
 impl<'r> fmt::Debug for SIDRef<'r> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = self.to_account_name_or_sid().unwrap_or_else(|_| String::new());
+        let s = self.to_account_name_or_sid()
+            .map_err(|_| fmt::Error::default())?;
+
         f.write_fmt(format_args!("SIDRef({:?})", s))
     }
 }
@@ -324,7 +337,7 @@ impl SID {
         }
 
         let sid_size = unsafe { GetLengthSid(psid) };
-        let mut sid: Vec<u8> = [0_u8].repeat(sid_size as usize);
+        let mut sid: Vec<u8> = vec![0_u8; sid_size as usize];
 
         unsafe { 
             CopySid(
@@ -367,7 +380,7 @@ impl SID {
             return Err(Error::empty());
         }
 
-        let mut sid = [0_u8].repeat(sid_size as usize);
+        let mut sid = vec![0_u8; sid_size as usize];
 
         unsafe {
             CreateWellKnownSid(
@@ -412,11 +425,13 @@ impl SID {
             )        
         } {
             Ok(()) => {
-                unsafe { CloseHandle( hProcess ) }?;
+                let _ = unsafe { CloseHandle( hToken ) };
+                let _ = unsafe { CloseHandle( hProcess ) };
                 return Err(Error::empty());
             },
             Err(e) if e.is_insufficient_buffer() => {},
             Err(e) => {
+                let _ = unsafe { CloseHandle( hToken ) };
                 let _ = unsafe { CloseHandle( hProcess ) };
                 return Err(e);
             },
@@ -427,7 +442,7 @@ impl SID {
             return Err(Error::empty());
         }
 
-        let mut sid_and_attributes_buf = Vec::with_capacity(sid_and_attributes_size as usize);
+        let mut sid_and_attributes_buf = vec![0_u8; sid_and_attributes_size as usize];
 
         match unsafe {
             GetTokenInformation(
@@ -445,6 +460,7 @@ impl SID {
             }
         };
 
+        unsafe { CloseHandle( hToken ) }?;
         unsafe { CloseHandle( hProcess ) }?;
 
         unsafe { sid_and_attributes_buf.set_len(sid_and_attributes_size as usize) };
@@ -471,14 +487,15 @@ impl SID {
     ///
     /// **Note**: If the error code is 0, `GetLastError()` returned `ERROR_INSUFFICIENT_BUFFER` after invoking `LookupAccountNameW` or
     ///         the `sid_size` is 0.
-    pub fn from_account_name(name: &str, system: Option<&str>) -> Result<(Self, String)> {
-        let mut name: Vec<u16> = str_to_wstr(name);
-        let name = PWSTR::from_raw(name.as_mut_ptr());
+    pub fn from_account_name(name: &OsStr, system_name: Option<&OsStr>) -> Result<(Self, OsString)> {
+        let name = U16CString::from_os_str_truncate(name);
+        let name = u16cstr_as_pcwstr(&name);
 
-        let mut system: Option<Vec<u16>> = system.map(|name| str_to_wstr(name));
-        let system: PWSTR = system.as_mut()
-            .map(|system| PWSTR::from_raw(system.as_mut_ptr()))
-            .unwrap_or_else(|| PWSTR::null());
+        let system_name: Option<U16CString> = system_name
+            .map(|system_name| U16CString::from_os_str_truncate(system_name));
+        let system_name: PCWSTR = system_name.as_ref()
+            .map(|system_name| u16cstr_as_pcwstr(system_name))
+            .unwrap_or_else(|| PCWSTR::null());
 
         let mut sid_size: u32 = 0;
         let mut sid_type: SID_NAME_USE = SID_NAME_USE(0);
@@ -487,7 +504,7 @@ impl SID {
 
         match unsafe { 
             LookupAccountNameW(
-                system,
+                system_name,
                 name,
                 None,
                 &mut sid_size,
@@ -509,12 +526,12 @@ impl SID {
             return Err(Error::empty());
         }
 
-        let mut sid = [0_u8].repeat(sid_size as usize);
-        let mut domain_name = [0_u16].repeat(domain_name_size as usize);
+        let mut sid = vec![0_u8; sid_size as usize];
+        let mut domain_name = vec![0_u16; domain_name_size as usize];
 
         unsafe {
             LookupAccountNameW(
-                system,
+                system_name,
                 name,
                 Some(PSID(sid.as_mut_ptr() as *mut c_void)),
                 &mut sid_size,
@@ -528,11 +545,9 @@ impl SID {
         unsafe { sid.set_len(sid_size as usize) };
 
         let domain_name = if domain_name_size > 0 {
-            let domain_name_wstr = PWSTR::from_raw(domain_name.as_mut_ptr());
-            unsafe { domain_name_wstr.to_string() }
-                .map_err(|_| Error::empty())?
+            U16String::from_vec(domain_name).to_os_string()
         } else {
-            String::new()
+            OsString::new()
         };
 
         let sid = Self {
@@ -549,15 +564,20 @@ impl SID {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_str(string_sid: &str) -> Result<Self> {
-        let mut raw_string_sid: Vec<u16> = str_to_wstr(string_sid);
-        let raw_string_sid = PWSTR::from_raw(raw_string_sid.as_mut_ptr());
+    pub fn from_os_str(string_sid: &OsStr) -> Result<Self> {
+        let raw_string_sid = U16CString::from_os_str_truncate(string_sid);
+        let raw_string_sid = u16cstr_as_pcwstr(&raw_string_sid);
 
         let mut psid: PSID = PSID(null_mut());
-        unsafe { ConvertStringSidToSidW(raw_string_sid, &mut psid) }?;
+        unsafe { 
+            ConvertStringSidToSidW(
+                raw_string_sid, 
+                &mut psid
+            ) 
+        }?;
 
         let size = unsafe { GetLengthSid(psid) };
-        let mut sid: Vec<u8> = Vec::with_capacity(size as usize);
+        let mut sid: Vec<u8> = vec![0_u8; size as usize];
 
         unsafe { 
             CopySid(
@@ -575,6 +595,11 @@ impl SID {
         Ok(Self {
             sid,
         })
+    }
+
+    pub fn from_str(string_sid: &str) -> Result<Self> {
+        let string_sid = OsString::from_str(string_sid).unwrap();
+        Self::from_os_str(&string_sid)
     }
 
     //
@@ -603,11 +628,15 @@ impl SID {
     ///
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
+    pub fn to_os_string( &self ) -> Result<OsString> {
+        self.as_ref().to_os_string()
+    }
+
     pub fn to_string( &self ) -> Result<String> {
         self.as_ref().to_string()
     }
 
-    pub fn to_account_name_or_sid( &self ) -> Result<String> {
+    pub fn to_account_name_or_sid( &self ) -> Result<OsString> {
         self.as_ref().to_account_name_or_sid()
     }
 
@@ -672,7 +701,7 @@ impl SID {
 impl fmt::Debug for SID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("SID");
-        let f = match self.to_string() {
+        let f = match self.to_os_string() {
             Ok(s) => {
                 f.field(&s)
             },
@@ -720,14 +749,33 @@ impl<'r> VSID<'r> {
             .unwrap_or(Self::None)
     }
 
+    pub fn from_os_str(string_sid: &OsStr) -> Result<VSID<'static>> {
+        let sid = SID::from_os_str(string_sid)?;
+        Ok(MaybePtr::Value(sid))
+    }
+
     pub fn from_str(string_sid: &str) -> Result<VSID<'static>> {
         let sid = SID::from_str(string_sid)?;
         Ok(MaybePtr::Value(sid))
     }
 
-    pub fn from_account_name(name: &str, system: Option<&str>) -> Result<(VSID<'static>, String)> {
+    pub fn from_account_name(name: &OsStr, system: Option<&OsStr>) -> Result<(VSID<'static>, OsString)> {
         let (sid, domain_name) = SID::from_account_name(name, system)?;
         Ok((MaybePtr::Value(sid), domain_name))
+    }
+
+    pub fn to_os_string(&self) -> Result<OsString> {
+        match self {
+            Self::None => {
+                Ok(OsString::new())
+            },
+            Self::Ptr(p) => {
+                p.to_os_string()
+            },
+            Self::Value(v) => {
+                v.to_os_string()
+            }
+        }
     }
 
     pub fn to_string(&self) -> Result<String> {
@@ -744,10 +792,10 @@ impl<'r> VSID<'r> {
         }
     }
 
-    pub fn to_account_name_or_sid(&self) -> Result<String> {
+    pub fn to_account_name_or_sid(&self) -> Result<OsString> {
         match self {
             Self::None => {
-                Ok(String::new())
+                Ok(OsString::new())
             },
             Self::Ptr(p) => {
                 p.to_account_name_or_sid()

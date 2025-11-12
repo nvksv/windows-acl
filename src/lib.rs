@@ -33,6 +33,7 @@ pub mod lowlevel {
 pub use ::windows;
 pub use ::windows::core::{Result, Error};
 pub use ::fallible_iterator;
+pub use ::widestring;
 
 // #[cfg(test)]
 mod tests;

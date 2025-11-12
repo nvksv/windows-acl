@@ -8,6 +8,7 @@ use core::{
     marker::PhantomData,
     fmt,
 };
+use std::ffi::OsString;
 use windows::{
     core::{
         Error, Result,
@@ -197,6 +198,10 @@ impl<'r, K: ACLKind> ACE<'r, K> {
     /// The target entity's SID in string representation
     pub fn sid_to_string(&self) -> Result<String> {
         self.sid.to_string()
+    }
+
+    pub fn sid_to_os_string(&self) -> Result<OsString> {
+        self.sid.to_os_string()
     }
 
     pub(crate) fn psid(&self) -> Option<PSID> {

@@ -8,7 +8,7 @@ use std::{
 };
 use windows::{
     core::{
-        Error, Result, HRESULT, PWSTR
+        Error, Result, HRESULT, PWSTR, PCWSTR,
     },
     Win32::{
         Foundation::{
@@ -53,6 +53,7 @@ use windows::{
         }
     },
 };
+use ::widestring::{U16CString, U16CStr, U16String, U16Str};
 
 use crate::{
     acl_kind::{DACL, SACL},
@@ -101,15 +102,27 @@ pub(crate) fn vec_as_pacl_mut( sid: &mut Vec<u8> ) -> *mut _ACL {
     sid.as_mut_ptr() as *mut _ACL
 }
 
-#[inline(always)]
-pub(crate) fn str_to_wstr( r: &str ) -> Vec<u16> {
-    OsStr::new(r).encode_wide().chain(once(0)).collect()
-}
-
 // #[inline(always)]
 // pub(crate) fn as_ppvoid_mut<T>( r: &mut T ) -> *mut *mut c_void {
 //     r as *mut _ as *mut *mut c_void
 // }
+
+#[inline(always)]
+pub(crate) fn u16cstr_as_pcwstr( s: &U16CStr ) -> PCWSTR {
+    PCWSTR::from_raw(s.as_ptr())
+}
+
+#[inline(always)]
+pub(crate) fn u16str_as_pwstr( s: &U16Str ) -> PWSTR {
+    PWSTR::from_raw(s.as_ptr() as *mut u16)
+}
+
+#[inline(always)]
+pub(crate) fn pwstr_as_u16str( s: PWSTR ) -> *const U16Str {
+    let s = unsafe { s.as_wide() };
+    U16Str::from_slice(s)
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

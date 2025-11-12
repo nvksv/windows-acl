@@ -10,8 +10,11 @@ use core::{
     mem,
 };
 use std::{
-    os::windows::io::RawHandle
+    os::windows::io::RawHandle,
+    path::{Path, PathBuf},
+    ffi::{OsStr, OsString},
 };
+use widestring::U16CString;
 use windows::{
     core::{Result, Error, PWSTR, HRESULT, BOOL},
     Win32::{
@@ -37,8 +40,7 @@ use windows::{
 };
 
 use crate::{
-    utils::{str_to_wstr, vec_as_pacl, DebugIdent, MaybeSet}, 
-    acl_kind::ACLKind,
+    acl_kind::ACLKind, utils::{DebugIdent, MaybeSet, pwstr_as_u16str, u16cstr_as_pcwstr, vec_as_pacl}
 };
 use super::{
     privilege::Privilege,
@@ -49,7 +51,7 @@ use super::{
 
 #[derive(Debug)]
 pub enum SecurityDescriptorSourceKind {
-    Path(String),
+    Path(PathBuf),
     Handle(HANDLE),
 }
 
@@ -90,25 +92,25 @@ impl SecurityDescriptorSource {
     }
 
     #[inline]
-    pub fn from_path(path: &str, object_type: SE_OBJECT_TYPE) -> Self {
+    pub fn from_path(path: &Path, object_type: SE_OBJECT_TYPE) -> Self {
         Self {
-            kind: SecurityDescriptorSourceKind::Path(path.to_string()),
+            kind: SecurityDescriptorSourceKind::Path(path.to_path_buf()),
             object_type
         }
     }
 
     #[inline]
-    pub fn from_file_path(path: &str) -> Self {
+    pub fn from_file_path(path: &Path) -> Self {
         Self::from_path(path, SE_FILE_OBJECT)
     }
 
     #[inline]
-    pub fn from_kernel_object_path(path: &str) -> Self {
+    pub fn from_kernel_object_path(path: &Path) -> Self {
         Self::from_path(path, SE_KERNEL_OBJECT)
     }
 
     #[inline]
-    pub fn from_registry_path(path: &str, is_wow6432key: bool) -> Self {
+    pub fn from_registry_path(path: &Path, is_wow6432key: bool) -> Self {
         let object_type = if is_wow6432key { SE_REGISTRY_WOW64_32KEY } else { SE_REGISTRY_KEY };
         Self::from_path(path, object_type)
     }    
@@ -213,12 +215,12 @@ impl WindowsSecurityDescriptor {
                 )
             },
             SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } => {
-                let mut wPath: Vec<u16> = str_to_wstr(path);
-                let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+                let path = U16CString::from_os_str_truncate(path.as_os_str());
+                let path = u16cstr_as_pcwstr(&path);
 
                 unsafe {
                     GetNamedSecurityInfoW(
-                        wPath,
+                        path,
                         *object_type,
                         flags,
                         Some(&mut pOwner),
@@ -337,11 +339,12 @@ impl WindowsSecurityDescriptor {
                 )
             },
             SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } => {
-                let mut wPath: Vec<u16> = str_to_wstr(path);
-                let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+                let path = U16CString::from_os_str_truncate(path.as_os_str());
+                let path = u16cstr_as_pcwstr(&path);
+
                 unsafe {
                     SetNamedSecurityInfoW(
-                        wPath,
+                        path,
                         *object_type,
                         flags,
                         owner,
@@ -380,11 +383,12 @@ impl WindowsSecurityDescriptor {
                 )
             },
             SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } => {
-                let mut wPath: Vec<u16> = str_to_wstr(path);
-                let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+                let path = U16CString::from_os_str_truncate(path.as_os_str());
+                let path = u16cstr_as_pcwstr(&path);
+
                 unsafe {
                     SetNamedSecurityInfoW(
-                        wPath,
+                        path,
                         *object_type,
                         flags,
                         Some(owner.psid()),
@@ -703,8 +707,8 @@ impl WindowsSecurityDescriptor {
 
         let is_container = *object_type == SE_FILE_OBJECT;
 
-        let mut wPath: Vec<u16> = str_to_wstr(path);
-        let wPath = PWSTR(wPath.as_mut_ptr() as *mut u16);
+        let path = U16CString::from_os_str_truncate(path.as_os_str());
+        let path = u16cstr_as_pcwstr(&path);
 
         let ace_count = unsafe { (*pacl).AceCount };
         let buffer_size = (ace_count as usize) * size_of::<INHERITED_FROMW>();
@@ -714,7 +718,7 @@ impl WindowsSecurityDescriptor {
 
         let ret = unsafe {
             GetInheritanceSourceW(
-                wPath,
+                path,
                 *object_type, 
                 K::get_security_information_bit(),
                 is_container,
@@ -739,7 +743,7 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn get_effective_access_rigths( &self, sid: SIDRef<'_> ) -> Result<u32> {
+    pub fn get_effective_access_rights( &self, sid: SIDRef<'_> ) -> Result<u32> {
         let mut trustee = unsafe { mem::zeroed::<TRUSTEE_W>() };
 
         unsafe {
@@ -800,13 +804,12 @@ impl WindowsInheritedFrom {
         item.GenerationGap
     }
 
-    pub fn ancestor_name( item: &INHERITED_FROMW ) -> Result<Option<String>> {
+    pub fn ancestor_name( item: &INHERITED_FROMW ) -> Result<Option<OsString>> {
         if item.AncestorName.is_null() {
             return Ok(None)
         }
         
-        let name = unsafe { item.AncestorName.to_string() }
-            .map_err(|_| Error::empty())?;
+        let name = unsafe { &* pwstr_as_u16str(item.AncestorName) }.to_os_string();
 
         Ok(Some(name))
     }
