@@ -139,7 +139,7 @@ impl<'r, K: ACLKind> ACE<'r, K> {
         true
     }
 
-    pub fn is_match<'s>( &self, sid: SIDRef<'s>, filter: &Option<ACEFilter> ) -> bool {
+    pub fn is_match( &self, sid: &SIDRef, filter: &Option<ACEFilter> ) -> bool {
         if !self.sid.eq_to_ref(sid) {
             return false;
         }
@@ -213,7 +213,7 @@ impl<'r, K: ACLKind> ACE<'r, K> {
         Self::calculate_entry_size( self.entry_type, sid )
     }
 
-    pub fn calculate_entry_size<'s>(entry_type: AceType, sid: SIDRef<'s>) -> Result<u32> {
+    pub fn calculate_entry_size(entry_type: AceType, sid: &SIDRef) -> Result<u32> {
         let size = acl_entry_size(entry_type)? + sid.len() - (mem::size_of::<u32>() as u32);
         Ok(size)
     }

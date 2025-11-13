@@ -38,11 +38,16 @@ use ::widestring::{U16CString, U16CStr, U16String, U16Str};
 
 /// Reference to SID bytes.
 /// Guaranted to be non-null and valid. Size is precalculated.
-#[derive(Clone, Copy, Hash)]
-pub struct SIDRef<'r>( &'r [u8] );
+#[derive(Hash)]
+#[repr(transparent)]
+pub struct SIDRef( [u8] );
 
-impl<'r> SIDRef<'r> {
-    pub fn from_psid( psid: PSID ) -> Result<Option<Self>> {
+impl SIDRef {
+    fn from_slice( sid: &[u8] ) -> &SIDRef {
+        unsafe { &* (sid as *const [u8] as *const Self) }
+    }
+
+    pub fn from_psid<'s>( psid: PSID ) -> Result<Option<&'s Self>> {
         if psid.is_invalid() {
             return Ok(None);
         }
@@ -51,15 +56,16 @@ impl<'r> SIDRef<'r> {
         }
 
         let sid = unsafe { Self::from_psid_unchecked(psid) }?;
+
         Ok(Some(sid))
     }
 
-    pub unsafe fn from_psid_unchecked( psid: PSID ) -> Result<Self> {
+    pub unsafe fn from_psid_unchecked<'s>( psid: PSID ) -> Result<&'s Self> {
         let sid_size = unsafe { GetLengthSid(psid) };
 
         let sid = unsafe { slice::from_raw_parts( psid.0 as *const u8, sid_size as usize ) };
 
-        Ok(Self(sid))
+        Ok(Self::from_slice(sid))
     }
 
     pub fn to_sid( &self ) -> Result<SID> {
@@ -81,12 +87,8 @@ impl<'r> SIDRef<'r> {
         })
     }
 
-    pub fn into_vsid( self ) -> VSID<'r> {
+    pub fn as_vsid( &self ) -> VSID<'_> {
         VSID::Ptr(self)
-    }
-
-    pub fn to_vsid<'s: 'r>( &'s self ) -> VSID<'s> {
-        VSID::Ptr(*self)
     }
 
     pub fn to_owned_vsid( &self ) -> Result<VSID<'static>> {
@@ -273,11 +275,11 @@ impl<'r> SIDRef<'r> {
             return Some(cmp::Ordering::Greater);
         };
 
-        if self.eq( &other_sidref ) {
+        if self.eq( other_sidref ) {
             return Some(cmp::Ordering::Equal);
         }
 
-        self.cmp(&other_sidref)
+        self.cmp(other_sidref)
     }
 
     #[inline]
@@ -293,7 +295,7 @@ impl<'r> SIDRef<'r> {
     }
 }
 
-impl<'r> fmt::Debug for SIDRef<'r> {
+impl fmt::Debug for SIDRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = self.to_account_name_or_sid()
             .map_err(|_| fmt::Error::default())?;
@@ -302,15 +304,15 @@ impl<'r> fmt::Debug for SIDRef<'r> {
     }
 }
 
-impl<'r> cmp::PartialEq for SIDRef<'r> {
+impl cmp::PartialEq for SIDRef {
     fn eq(&self, other: &Self) -> bool {
         self.eq(other)
     }
 }
 
-impl<'r> cmp::Eq for SIDRef<'r> {}
+impl cmp::Eq for SIDRef {}
 
-impl<'r> cmp::PartialOrd for SIDRef<'r> {
+impl cmp::PartialOrd for SIDRef {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.cmp(other)
     }
@@ -324,7 +326,7 @@ pub struct SID {
 }
 
 impl SID {
-    pub fn from_ref( r: SIDRef ) -> Result<Self> {
+    pub fn from_ref( r: &SIDRef ) -> Result<Self> {
         r.to_sid()
     }
 
@@ -604,17 +606,16 @@ impl SID {
 
     //
 
-    pub fn as_ref<'r>( &'r self ) -> SIDRef<'r> {
-        SIDRef( self.sid.as_slice() )
+    pub fn as_ref( &self ) -> &SIDRef {
+        SIDRef::from_slice( self.sid.as_slice() )
     }
 
     pub fn into_vsid( self ) -> VSID<'static> {
         VSID::Value(self)
     }
 
-    pub fn to_vsid<'s>( &'s self ) -> VSID<'s> {
-        let r = self.as_ref();
-        VSID::Ptr(r)
+    pub fn as_vsid( &self ) -> VSID<'_> {
+        self.as_ref().as_vsid()
     }
 
     pub fn to_owned_vsid( &self ) -> VSID<'static> {
@@ -661,7 +662,7 @@ impl SID {
         unsafe { EqualSid(self.psid(), other) }.is_ok()
     }
 
-    pub fn eq_to_ref<'rr>( &self, other: SIDRef<'rr>) -> bool {
+    pub fn eq_to_ref( &self, other: &SIDRef) -> bool {
         self.as_ref().eq(&other)
     }
 
@@ -698,6 +699,12 @@ impl SID {
     }
 }
 
+impl AsRef<SIDRef> for SID {
+    fn as_ref(&self) -> &SIDRef {
+        self.as_ref()
+    }
+}
+
 impl fmt::Debug for SID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("SID");
@@ -729,7 +736,7 @@ impl cmp::PartialOrd for SID {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub type VSID<'r> = MaybePtr<SIDRef<'r>, SID>;
+pub type VSID<'r> = MaybePtr<&'r SIDRef, SID>;
 
 impl<'r> VSID<'r> {
     pub fn empty() -> VSID<'static>{
@@ -854,7 +861,7 @@ impl<'r> VSID<'r> {
         Ok(static_self)
     }
 
-    pub fn as_ref<'s: 'r>( &'s self ) -> Option<SIDRef<'s>> {
+    pub fn as_ref( &self ) -> Option<&SIDRef> {
         match self {
             Self::None => {
                 None
@@ -898,35 +905,29 @@ impl<'r> VSID<'r> {
     //
 
     pub fn eq_to_psid( &self, other: PSID) -> bool {
-        let self_ref = self.as_ref();
         let other_ref = SIDRef::from_psid(other).ok().flatten();
         
-        match (self_ref, other_ref) {
+        match (self.as_ref(), other_ref) {
             (None, None) => { true },
             (None, Some(_)) => { false },
             (Some(_), None) => { false },
-            (Some(s), Some(o)) => { s.eq(&o) }
+            (Some(s), Some(o)) => { s.eq(o) }
         }        
     }
 
-    pub fn eq_to_ref<'rr>( &self, other: SIDRef<'rr>) -> bool {
-        let self_ref = self.as_ref();
-        
-        match self_ref {
+    pub fn eq_to_ref( &self, other: &SIDRef) -> bool {
+        match self.as_ref() {
             None => { false },
-            Some(s) => { s.eq(&other) }
+            Some(s) => { s.eq(other) },
         }        
     }
 
     pub fn eq<'rr>( &self, other: &VSID<'rr>) -> bool {
-        let self_ref = self.as_ref();
-        let other_ref = other.as_ref();
-
-        match (self_ref, other_ref) {
+        match (self.as_ref(), other.as_ref()) {
             (None, None) => { true },
             (None, Some(_)) => { false },
             (Some(_), None) => { false },
-            (Some(s), Some(o)) => { s.eq(&o) }
+            (Some(s), Some(o)) => { s.eq(o) }
         }        
     }
 
@@ -975,6 +976,12 @@ impl<'r> VSID<'r> {
     }
 
 }
+
+// impl<'r> AsRef<SIDRef> for VSID<'r> {
+//     fn as_ref(&self) -> &SIDRef {
+//         self.as_ref()
+//     }
+// }
 
 impl<'r> Clone for VSID<'r> {
     fn clone(&self) -> Self {
@@ -1038,9 +1045,9 @@ pub trait IntoVSID<'s> {
     fn into_vsid( self ) -> VSID<'s>;
 }
 
-impl<'s, 'r: 's> IntoVSID<'s> for SIDRef<'r> {
+impl<'s, 'r: 's> IntoVSID<'s> for &'r SIDRef {
     fn into_vsid( self ) -> VSID<'s> {
-        self.into_vsid()
+        self.as_vsid()
     }
 }
 
@@ -1058,7 +1065,7 @@ impl<'s> IntoVSID<'s> for VSID<'s> {
 
 impl<'s, 'r: 's> IntoVSID<'s> for &'r SID {
     fn into_vsid( self ) -> VSID<'s> {
-        self.to_vsid()
+        self.as_vsid()
     }
 }
 

@@ -31,14 +31,10 @@ use windows::{
 use fallible_iterator::FallibleIterator;
 
 use crate::{
-    acl_kind::{ACLKind, IsACLKind, DACL, SACL},
-    ace::{ACE, ACEFilter, AVERAGE_ACE_SIZE, MAX_ACL_SIZE, IntoOptionalACEFilter}, 
-    types::*, 
-    utils::{as_ppvoid_mut, vec_as_pacl_mut},
-    winapi::{
-        security_descriptor::WindowsInheritedFrom,
-        sid::{SIDRef, IntoVSID}, 
-    },
+    ace::{ACE, ACEFilter, AVERAGE_ACE_SIZE, IntoOptionalACEFilter, MAX_ACL_SIZE}, acl_kind::{ACLKind, DACL, IsACLKind, SACL}, types::*, utils::{as_ppvoid_mut, vec_as_pacl_mut}, winapi::{
+        security_descriptor::{WindowsInheritedFrom, WindowsSecurityDescriptor},
+        sid::{IntoVSID, SIDRef}, 
+    }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -124,7 +120,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     ///
     /// # Errors
     /// On error, a Windows error code wrapped in a `Err` type.
-    fn remove<'s>( self, sid: SIDRef<'s>, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn remove<'s: 'r>( self, sid: &'s SIDRef, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
         ACLListEntryRemover::new(
             self, 
             sid,
@@ -150,16 +146,24 @@ pub struct ACL<'r, K: ACLKind> {
  
 impl<'r, K: ACLKind> ACL<'r, K> {
     /// Warning: pacl may be NULL
-    pub fn from_pacl( pacl: *const _ACL ) -> Self {
-        Self {
+    pub unsafe fn from_pacl( pacl: *const _ACL ) -> ACL<'static, K> where K: 'static {
+        ACL {
             pacl,
             _ph: PhantomData,
         }
     }
 
-    pub fn from_null() -> Self {
-        Self {
+    pub fn from_null() -> ACL<'static, K> {
+        ACL {
             pacl: null(),
+            _ph: PhantomData,
+        }
+    }
+
+    pub(crate) unsafe fn from_descriptor<'d>( _descriptor: &'d WindowsSecurityDescriptor, pacl: Option<*const _ACL> ) -> ACL<'d, K> {
+        let pacl = pacl.unwrap_or(null());
+        ACL {
+            pacl,
             _ph: PhantomData,
         }
     }
@@ -185,12 +189,12 @@ impl<'r, K: ACLKind> ACL<'r, K> {
         AceEntryHdrIterator::new(self.pacl)
     }
 
-    pub fn iter( &self ) -> AceEntryIterator<'r, K> {
+    pub fn iter<'s>( &'s self ) -> AceEntryIterator<'s, K> {
         AceEntryIterator::new(self.pacl)
     }
 
     /// Returns a `Vec<ACLEntry>` of access control list entries for the specified named object path.
-    pub fn all(&self) -> Result<Vec<ACE<'r, K>>> {
+    pub fn all(&self) -> Result<Vec<ACE<'_, K>>> {
         self.iter()
             .try_collect()
     }
@@ -203,7 +207,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn all_filtered<'rr: 'r>(&self, sid: SIDRef<'rr>, mask: impl IntoOptionalACEFilter ) -> Result<Vec<ACE<'r, K>>> {
+    pub fn all_filtered<'s>(&'s self, sid: &SIDRef, mask: impl IntoOptionalACEFilter ) -> Result<Vec<ACE<'s, K>>> {
         let mask = mask.into_optional_mask();
 
         self.iter()
@@ -257,7 +261,8 @@ impl<K: ACLKind> ACLVecList<K> {
 
     pub fn as_list<'s>( &'s self ) -> Result<ACL<'s, K>> {
         let pacl = self.pacl()?;
-        Ok(ACL::from_pacl(pacl))
+        let acl = unsafe { ACL::from_pacl(pacl) };
+        Ok(acl)
     }
 
     pub fn from_iter<'r, I>(mut iter: I) -> Result<Self> where I: ACLEntryIterator<'r, K> {
@@ -657,14 +662,14 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLEntryIterator<'r, K> for ACL
 
 pub struct ACLListEntryRemover<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> {
     inner: I,
-    sid: Option<SIDRef<'s>>,
+    sid: Option<&'s SIDRef>,
     filter: Option<ACEFilter>,
     _ph_r: PhantomData<&'r ()>,
     _ph_k: PhantomData<K>,
 }
 
 impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryRemover<'r, 's, I, K> {
-    pub fn new( inner: I, sid: SIDRef<'s>, filter: Option<ACEFilter> ) -> Result<Self> {
+    pub fn new( inner: I, sid: &'s SIDRef, filter: Option<ACEFilter> ) -> Result<Self> {
         Ok(Self {
             inner,
             sid: Some(sid),

@@ -371,9 +371,9 @@ impl WindowsSecurityDescriptor {
         Ok(())
     }
 
-    pub fn take_ownership<'s>(
+    pub fn take_ownership(
         source: &SecurityDescriptorSource,
-        owner: SIDRef<'s>
+        owner: &SIDRef,
     ) -> Result<()> {
         let flags = OWNER_SECURITY_INFORMATION;
 
@@ -651,7 +651,7 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn owner<'s>( &'s self ) -> Result<Option<SIDRef<'s>>> {
+    pub fn owner( &self ) -> Result<Option<&SIDRef>> {
         match &self.owner {
             MaybeSet::NotSet(ppsid) => {
                 Ok(SIDRef::from_psid(*ppsid)?)
@@ -662,7 +662,7 @@ impl WindowsSecurityDescriptor {
         }
     }
 
-    pub fn set_owner<'s>(&mut self, owner: SIDRef<'s>) -> Result<()> {
+    pub fn set_owner(&mut self, owner: &SIDRef) -> Result<()> {
         self.owner = MaybeSet::Set(owner.to_sid()?);
         Ok(())
     }
@@ -673,7 +673,7 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn group<'s, 'r>( &'s self ) -> Result<Option<SIDRef<'s>>> {
+    pub fn group( &self ) -> Result<Option<&SIDRef>> {
         match &self.group {
             MaybeSet::NotSet(ppsid) => {
                 Ok(SIDRef::from_psid(*ppsid)?)
@@ -684,16 +684,16 @@ impl WindowsSecurityDescriptor {
         }
     }
 
-    pub fn set_group<'s>(&mut self, group: SIDRef<'s>) -> Result<()> {
+    pub fn set_group(&mut self, group: &SIDRef) -> Result<()> {
         self.group = MaybeSet::Set(group.to_sid()?);
         Ok(())
     }
 
-    pub fn unset_group<'s>(&mut self) -> Result<()> {
+    pub fn unset_group(&mut self) -> Result<()> {
         self.read_group_from_descriptor()
     }
 
-    pub fn get_inheritance_source<'r, K: ACLKind>( 
+    pub fn get_inheritance_source<K: ACLKind>( 
         &self, 
         source: &SecurityDescriptorSource,
         pacl: *const _ACL,
@@ -750,7 +750,7 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn get_effective_access_rights( &self, sid: SIDRef<'_> ) -> Result<u32> {
+    pub fn get_effective_access_rights( &self, sid: &SIDRef ) -> Result<u32> {
         let mut trustee = unsafe { mem::zeroed::<TRUSTEE_W>() };
 
         unsafe {
