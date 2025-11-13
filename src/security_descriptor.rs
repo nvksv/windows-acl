@@ -70,6 +70,10 @@ use crate::{
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+pub trait ACLEntryIteratorFn<'t, 'r, T, R, K>: Fn(T) -> Result<R> where K: ACLKind, T: ACLEntryIterator<'t, K>, R: ACLEntryIterator<'r, K> {}
+impl<'t, 'r, F, T, R, K> ACLEntryIteratorFn<'t, 'r, T, R, K> for F where F: Fn(T) -> Result<R>, K: ACLKind, T: ACLEntryIterator<'t, K>, R: ACLEntryIterator<'r, K> {}
+
+
 /// `SD` represents the access control list (discretionary or oth discretionary/system) for a named object
 pub struct SecurityDescriptor {
     descriptor: WindowsSecurityDescriptor,
@@ -305,7 +309,7 @@ impl SecurityDescriptor {
 
     pub fn dacl( &self ) -> ACL<'_, DACL> {
         let dacl = self.descriptor.dacl().unwrap_or(null());
-        ACL::from_pacl(dacl)
+        unsafe { ACL::from_pacl(dacl) }
     }
 
     pub fn set_dacl( &mut self, dacl: ACLVecList<DACL> ) -> Result<()> {
@@ -316,40 +320,40 @@ impl SecurityDescriptor {
         self.descriptor.set_dacl(dacl)
     }
 
-    fn get_dacl( &mut self ) -> ACL<'_, DACL> {
-        unsafe { ACL::from_descriptor( &self.descriptor, self.descriptor.dacl() ) }
-    }
 
-    fn get_updated_dacl<'rr, 'r: 'rr, 's: 'r + 'rr, F, R>( &'s mut self, f: F ) -> Result<Vec<u8>>
+    // pub fn new_dacl<'r, 's: 'r, F, R>( &'s self, f: F ) -> Result<Vec<u8>>
+    // where
+    //     F: ACLEntryIteratorFn<'r, AceEntryIterator<'r, DACL>, R, DACL>, 
+    //     R: ACLEntryIterator<'r, DACL>
+    // {
+    //     let dacl = self.dacl();
+
+    //     let mut new_dacl = f(dacl.iter())?
+    //         .try_collect::<ACLVecList<DACL>>()?
+    //         .into_vec();
+
+    //     Ok(new_dacl)
+    // }
+
+    pub fn update_dacl<'x, 't, 'r, 's: 't , F, R>( &'s mut self, f: &dyn Fn(&'s SIDRef) -> Result<()> ) -> Result<()>
     where
-        F: Fn(AceEntryIterator<'r, DACL>) -> Result<R>,
-        R: ACLEntryIterator<'rr, DACL>,
+        // F: Fn(&'x SIDRef) -> Result<()>, 
+        // F: Fn(&AceEntryIterator<'t, DACL>) -> Result<R>, 
+        // F: ACLEntryIteratorFn<'t, 't, AceEntryIterator<'t, DACL>, R, DACL>, 
+        R: ACLEntryIterator<'r, DACL>
     {
-        let dacl = self.get_dacl();
+        {
+        // let dacl = self.dacl();
+        let iter = self.owner()?.unwrap();
+        f(iter);
+        }
+        // let new_dacl = f(dacl.iter())?
+        //     .try_collect::<ACLVecList<DACL>>()?
+        //     .into_vec();
 
-        let i = dacl.iter();
-        let r = f( i )?;
-        let dacl = r
-            .try_collect::<ACLVecList<DACL>>()?
-            .into_vec();
+        // let new_dacl = self.new_dacl(f)?;
 
-        Ok(dacl)
-    }
-
-    pub fn update_dacl<'s, F, R>( &'s mut self, f: F ) -> Result<()>
-    where
-        F: Fn(AceEntryIterator<'s, DACL>) -> Result<R>,
-        R: ACLEntryIterator<'s, DACL>,
-    {
-        let new_dacl = {
-            let dacl = unsafe { ACL::from_descriptor( &self.descriptor, self.descriptor.dacl() ) };
-
-            f( dacl.iter() )?
-                .try_collect::<ACLVecList<DACL>>()?
-                .into_vec()
-        };
-
-        self.inner_set_dacl(new_dacl)
+        self.inner_set_dacl(vec![])
     }
 
     pub fn iter_dacl_with_inheritance_source( &self ) -> Result<ACEWithInheritedFromIterator<'_, DACL>> {
@@ -390,7 +394,7 @@ impl SecurityDescriptor {
         }
 
         let sacl = self.descriptor.sacl().unwrap_or(null());
-        ACL::from_pacl(sacl)
+        unsafe { ACL::from_pacl(sacl) }
     }
 
     pub fn set_sacl( &mut self, dacl: ACLVecList<SACL> ) -> Result<()> {
@@ -405,17 +409,16 @@ impl SecurityDescriptor {
         self.descriptor.set_sacl(sacl)
     }
 
-    pub fn update_sacl<'s, 'r, F, R>( &'s mut self, f: F ) -> Result<()>
+    pub fn update_sacl<'r, F, R>( &mut self, f: F ) -> Result<()>
     where
-        F: Fn(AceEntryIterator<'s, SACL>) -> Result<R>,
+        F: Fn(AceEntryIterator<'_, SACL>) -> Result<R>,
         R: ACLEntryIterator<'r, SACL>,
     {
         if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
-        let sacl = self.descriptor.sacl().unwrap_or(null());
-        let sacl = ACL::from_pacl(sacl);
+        let sacl = self.sacl();
 
         let new_sacl = f(sacl.iter())?
             .try_collect::<ACLVecList<SACL>>()?
@@ -575,13 +578,16 @@ impl SecurityDescriptor {
         Ok(ACCESS_MASK(access_mask))
     }
 
+    fn dacl_all( &self ) -> Result<Vec<ACE<'_, DACL>>> {
+        let d = self.dacl();
+        d.all()
+    }
+
 }
 
 impl fmt::Debug for SecurityDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let dacl_entries = self.dacl().all();
-
-        // let dacl_entries = self.dacl().all().unwrap_or_default();
+        let dacl_entries = self.dacl_all().unwrap_or_default();
         let sacl_entries = self.sacl().all().unwrap_or_default();
         let owner = self.owner().unwrap_or_default();
         let group = self.group().unwrap_or_default();

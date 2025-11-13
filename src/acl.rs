@@ -68,7 +68,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.    
     #[inline]
-    fn add<'e: 'r, 's>( self, entry: ACE<'e, K>, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn add( self, entry: ACE<'r, K>, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
         ACLListEntryAdder::new(
             self, 
             entry, 
@@ -120,7 +120,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     ///
     /// # Errors
     /// On error, a Windows error code wrapped in a `Err` type.
-    fn remove<'s: 'r>( self, sid: &'s SIDRef, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
+    fn remove( self, sid: &SIDRef, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
         ACLListEntryRemover::new(
             self, 
             sid,
@@ -139,6 +139,7 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#[derive(Debug, Clone, Copy)]
 pub struct ACL<'r, K: ACLKind> {
     pacl: *const _ACL,
     _ph_r: PhantomData<&'r ()>,
@@ -163,16 +164,16 @@ impl<'r, K: ACLKind> ACL<'r, K> {
         }
     }
 
-    pub(crate) unsafe fn from_descriptor<'d>( _descriptor: &'d WindowsSecurityDescriptor, pacl: Option<*const _ACL> ) -> ACL<'d, K> {
-        let pacl = pacl.unwrap_or(null());
-        ACL {
-            pacl,
-            _ph_r: PhantomData,
-            _ph_k: PhantomData,
-        }
-    }
+    // pub(crate) unsafe fn from_descriptor<'d>( _descriptor: &'d WindowsSecurityDescriptor, pacl: Option<*const _ACL> ) -> ACL<'d, K> {
+    //     let pacl = pacl.unwrap_or(null());
+    //     ACL {
+    //         pacl,
+    //         _ph_r: PhantomData,
+    //         _ph_k: PhantomData,
+    //     }
+    // }
 
-    pub fn ace_count( &self ) -> u16 {
+    pub fn ace_count( self ) -> u16 {
         if !self.pacl.is_null() {
             unsafe { (*self.pacl).AceCount }
         } else {
@@ -181,24 +182,24 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     }
 
     /// Warning: may return NULL
-    pub fn pacl(&self) -> *const _ACL {
+    pub fn pacl(self) -> *const _ACL {
         self.pacl
     }
 
-    pub fn iter_hdr( &self ) -> AceHdrIterator<'r> {
+    pub fn iter_hdr( self ) -> AceHdrIterator<'r> {
         AceHdrIterator::new(self.pacl)
     }
 
-    pub fn iter_entry_hdr( &self ) -> AceEntryHdrIterator<'r, K> {
+    pub fn iter_entry_hdr( self ) -> AceEntryHdrIterator<'r, K> {
         AceEntryHdrIterator::new(self.pacl)
     }
 
-    pub fn iter<'s>( &'s self ) -> AceEntryIterator<'s, K> where 'r: 's {
+    pub fn iter( self ) -> AceEntryIterator<'r, K> {
         AceEntryIterator::new(self.pacl)
     }
 
     /// Returns a `Vec<ACLEntry>` of access control list entries for the specified named object path.
-    pub fn all(&self) -> Result<Vec<ACE<'_, K>>> {
+    pub fn all(self) -> Result<Vec<ACE<'r, K>>> {
         self.iter()
             .try_collect()
     }
@@ -211,7 +212,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn all_filtered<'s>(&'s self, sid: &SIDRef, mask: impl IntoOptionalACEFilter ) -> Result<Vec<ACE<'s, K>>> {
+    pub fn all_filtered(self, sid: &SIDRef, mask: impl IntoOptionalACEFilter ) -> Result<Vec<ACE<'r, K>>> {
         let mask = mask.into_optional_mask();
 
         self.iter()

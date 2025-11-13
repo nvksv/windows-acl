@@ -66,7 +66,7 @@ impl<'r, K: ACLKind> fmt::Debug for ACE<'r, K> {
 
 impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     #[inline]
-    pub fn new_allow<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_allow( sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::AccessAllow,
             sid: sid.into_vsid(),
@@ -77,7 +77,7 @@ impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     }
 
     #[inline]
-    pub fn new_deny<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_deny( sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::AccessDeny,
             sid: sid.into_vsid(),
@@ -90,7 +90,7 @@ impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
 
 impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
     #[inline]
-    pub fn new_audit<'s: 'r>( sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_audit( sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::SystemAudit,
             sid: sid.into_vsid(),
@@ -101,7 +101,7 @@ impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
     }
 
     #[inline]
-    pub fn new_mandatory_label<'s: 'r>( label_sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_mandatory_label( label_sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
         Self {
             entry_type: AceType::SystemMandatoryLabel,
             sid: label_sid.into_vsid(),

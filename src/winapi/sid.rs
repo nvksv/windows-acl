@@ -4,7 +4,7 @@ use core::{
     ffi::c_void, fmt, mem, ptr::null_mut, slice, cmp, hash, fmt::Debug,
 };
 use std::{
-    ffi::{OsStr, OsString}, str::FromStr,
+    ffi::{OsStr, OsString}, str::FromStr, ops::Deref,
 };
 use crate::{
     utils::{DebugUnpretty, MaybePtr, u16cstr_as_pcwstr, u16str_as_pwstr, pwstr_as_u16str},
@@ -701,6 +701,14 @@ impl SID {
 
 impl AsRef<SIDRef> for SID {
     fn as_ref(&self) -> &SIDRef {
+        self.as_ref()
+    }
+}
+
+impl Deref for SID {
+    type Target = SIDRef;
+
+    fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
