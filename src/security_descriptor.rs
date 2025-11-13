@@ -328,7 +328,8 @@ impl SecurityDescriptor {
         let dacl = self.get_dacl();
 
         let i = dacl.iter();
-        let dacl = f( i )?
+        let r = f( i )?;
+        let dacl = r
             .try_collect::<ACLVecList<DACL>>()?
             .into_vec();
 

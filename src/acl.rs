@@ -141,22 +141,25 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
 
 pub struct ACL<'r, K: ACLKind> {
     pacl: *const _ACL,
-    _ph: PhantomData<&'r K>,
+    _ph_r: PhantomData<&'r ()>,
+    _ph_k: PhantomData<K>,
 }
  
 impl<'r, K: ACLKind> ACL<'r, K> {
     /// Warning: pacl may be NULL
-    pub unsafe fn from_pacl( pacl: *const _ACL ) -> ACL<'static, K> where K: 'static {
+    pub unsafe fn from_pacl( pacl: *const _ACL ) -> ACL<'static, K> {
         ACL {
             pacl,
-            _ph: PhantomData,
+            _ph_r: PhantomData,
+            _ph_k: PhantomData,
         }
     }
 
     pub fn from_null() -> ACL<'static, K> {
         ACL {
             pacl: null(),
-            _ph: PhantomData,
+            _ph_r: PhantomData,
+            _ph_k: PhantomData,
         }
     }
 
@@ -164,7 +167,8 @@ impl<'r, K: ACLKind> ACL<'r, K> {
         let pacl = pacl.unwrap_or(null());
         ACL {
             pacl,
-            _ph: PhantomData,
+            _ph_r: PhantomData,
+            _ph_k: PhantomData,
         }
     }
 
@@ -189,7 +193,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
         AceEntryHdrIterator::new(self.pacl)
     }
 
-    pub fn iter<'s>( &'s self ) -> AceEntryIterator<'s, K> {
+    pub fn iter<'s>( &'s self ) -> AceEntryIterator<'s, K> where 'r: 's {
         AceEntryIterator::new(self.pacl)
     }
 
