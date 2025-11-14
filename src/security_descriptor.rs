@@ -70,8 +70,41 @@ use crate::{
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub trait ACLEntryIteratorFn<'t, 'r, T, R, K>: Fn(T) -> Result<R> where K: ACLKind, T: ACLEntryIterator<'t, K>, R: ACLEntryIterator<'r, K> {}
-impl<'t, 'r, F, T, R, K> ACLEntryIteratorFn<'t, 'r, T, R, K> for F where F: Fn(T) -> Result<R>, K: ACLKind, T: ACLEntryIterator<'t, K>, R: ACLEntryIterator<'r, K> {}
+
+
+
+// trait Lo<'r, K: ACLKind> {
+//     type I: ACLEntryIterator<'r, K>;
+// }
+trait Lo<'r, K: ACLKind> {
+    type I: ACLEntryIterator<'r, K>;
+}
+impl<'r, I, K> Lo<'r, K> for I where I: ACLEntryIterator<'r, K>, K: ACLKind {
+    type I = I;
+}
+
+trait Hi<K: ACLKind>: for<'r> Lo<'r, K> {}
+impl<I, K> Hi<K> for I where I: for<'r> Lo<'r, K>, K: ACLKind {}
+
+// pub trait ACLEntryIteratorFnLt<'r, T, R, K>: Fn(T) -> Result<R> where K: ACLKind, T: ACLEntryIterator<'r, K>, R: ACLEntryIterator<'r, K> {}
+// impl<'r, F, T, R, K> ACLEntryIteratorFnLt<'r, T, R, K> for F where F: Fn(T) -> Result<R>, K: ACLKind, T: ACLEntryIterator<'r, K>, R: ACLEntryIterator<'r, K> {}
+
+// pub trait ACLEntryIteratorFn<T, R, K>: for<'r> ACLEntryIteratorFnLt<'r, <T as Lo<'r, K>>::I, <R as Lo<'r, K>>::I, K> where K: ACLKind, T: Hi<K>, R: Hi<K> {}
+// impl<F, T, R, K> ACLEntryIteratorFn<T, R, K> for F where F: for<'r> ACLEntryIteratorFnLt<'r, <T as Lo<'r, K>>::I, <R as Lo<'r, K>>::I, K>, K: ACLKind, T: Hi<K>, R: Hi<K> {}
+
+// pub trait ACLEntryIteratorFnLt<'r, R, K>: Fn(AceEntryIterator<'r, K>) -> Result<R> where K: ACLKind, R: ACLEntryIterator<'r, K> {}
+// impl<'r, F, R, K> ACLEntryIteratorFnLt<'r, R, K> for F where F: Fn(AceEntryIterator<'r, K>) -> Result<R>, K: ACLKind, R: ACLEntryIterator<'r, K> {}
+
+// pub trait ACLEntryIteratorFn<R, K>: for<'r> ACLEntryIteratorFnLt<'r, <R as Lo<'r, K>>::I, K> where K: ACLKind, R: Hi<K> {}
+// impl<F, R, K> ACLEntryIteratorFn<R, K> for F where F: for<'r> ACLEntryIteratorFnLt<'r, <R as Lo<'r, K>>::I, K>, K: ACLKind, R: Hi<K> {}
+
+pub trait ACLEntryIteratorFn<K>: for<'r> Fn(AceEntryIterator<'r, K>) -> Result<R> where K: ACLKind {
+    type R: Hi<K>;
+}
+
+impl<F, R, K> ACLEntryIteratorFn<K> for F where F: for<'r> Fn(AceEntryIterator<'r, K>) -> Result<R>, K: ACLKind {
+    type R = R;
+}
 
 
 /// `SD` represents the access control list (discretionary or oth discretionary/system) for a named object
@@ -335,18 +368,27 @@ impl SecurityDescriptor {
     //     Ok(new_dacl)
     // }
 
-    pub fn update_dacl<'x, 't, 'r, 's: 't , F, R>( &'s mut self, f: &dyn Fn(&'s SIDRef) -> Result<()> ) -> Result<()>
+    // pub fn update_dacl<'r, 's, F, R>( &'s mut self, f: F ) -> Result<()>
+    // where
+    //     F: Fn(AceEntryIterator<'_, DACL>) -> R,
+    //     R: ACLEntryIterator<'r, DACL>,
+    // {
+    //     self.inner_update_dacl::<AceEntryIterator<'_, DACL>, R, F>(f)
+    // }
+
+    pub fn update_dacl<F>( &mut self, f: F ) -> Result<()>
     where
-        // F: Fn(&'x SIDRef) -> Result<()>, 
-        // F: Fn(&AceEntryIterator<'t, DACL>) -> Result<R>, 
+        F: ACLEntryIteratorFn<DACL>,
+        // F: ACLEntryIteratorFn<AceEntryIterator<'_, DACL>, R, DACL>, 
+        //for<'x> F: Fn(AceEntryIterator<'x, DACL>) -> Result<R>, 
+        // for<'q> T: ACLEntryIterator<'t, DACL>,
         // F: ACLEntryIteratorFn<'t, 't, AceEntryIterator<'t, DACL>, R, DACL>, 
-        R: ACLEntryIterator<'r, DACL>
+        //R: ACLEntryIterator<'x, DACL>
     {
-        {
-        // let dacl = self.dacl();
-        let iter = self.owner()?.unwrap();
+        let iter = self.dacl().iter();
+        // let iter = self.owner()?.unwrap();
         f(iter);
-        }
+
         // let new_dacl = f(dacl.iter())?
         //     .try_collect::<ACLVecList<DACL>>()?
         //     .into_vec();

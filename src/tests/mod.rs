@@ -1,9 +1,7 @@
 #![cfg(windows)]
 
 use crate::{
-    utils::current_user_account_name, ACE, ACLKind, AceType, SecurityDescriptor, SID, VSID, ACLEntryIterator, ACEFilter, ACEMask, IntoOptionalACEFilter, IntoOptionalACEMask, ACCESS_MASK,
-    helper::DebugUnpretty,
-    winapi::api::ErrorExt,
+    DACL, ACCESS_MASK, ACE, ACEFilter, ACEMask, ACLEntryIterator, ACLKind, AceType, IntoOptionalACEFilter, IntoOptionalACEMask, SID, SecurityDescriptor, VSID, acl::AceEntryIterator, helper::DebugUnpretty, utils::current_user_account_name, winapi::api::ErrorExt
 };
 use std::{
     env::current_exe, ffi::{OsStr, OsString}, fs::{File, OpenOptions}, os::windows::{
