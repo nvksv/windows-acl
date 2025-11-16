@@ -300,7 +300,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     };
     sd.read().unwrap();
 
-    sd.update_dacl(|dacl| {
+    sd.update_dacl(|dacl: AceEntryIterator<'_, DACL>| {
         dacl.add_allow(
             &sids.current_user,
             0,
@@ -334,7 +334,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
         }
     };
 
-    sd.update_dacl(|dacl| {
+    sd.update_dacl(|dacl: AceEntryIterator<'_, DACL>| {
         dacl.remove(
             sids.current_user.as_ref(),
             ACEFilter::new().set_entry_type(AceType::AccessAllow),
@@ -396,13 +396,13 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     };
     sd.read().unwrap();
 
-    sd.update_dacl(|dacl| {
+    sd.update_dacl(|dacl: AceEntryIterator<'_, DACL>| {
         dacl.add_deny(
             &sids.current_user, 
             0, 
             FILE_GENERIC_WRITE,
             None
-        ) ; Ok(())
+        )
     }).unwrap();
 
     sd.write().unwrap();
@@ -430,7 +430,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
         }
     }
 
-    sd.update_dacl(|dacl| {
+    sd.update_dacl(|dacl: AceEntryIterator<'_, DACL>| {
         dacl.remove(
             &sids.current_user,
             ACEFilter::new().set_entry_type(AceType::AccessDeny),
