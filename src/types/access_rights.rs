@@ -1,27 +1,15 @@
 #![allow(non_snake_case)]
 
-use core::{ops, default, fmt};
-use std::{marker::PhantomData, path::is_separator};
+use core::{default, fmt, ops};
+use std::{marker::PhantomData};
 use windows::{
-    core::Result,
     Win32::{
-        Foundation::{
-            GENERIC_ACCESS_RIGHTS,
-        },
-        Security::{
-            Authorization::{
-                SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
-                SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
-                SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT, 
-            }, 
-        },
+        Foundation::GENERIC_ACCESS_RIGHTS,
         Storage::FileSystem::{
-            FILE_ACCESS_RIGHTS, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_APPEND_DATA, DELETE, FILE_DELETE_CHILD,
-            FILE_EXECUTE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
-            FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_READ_EA, FILE_TRAVERSE, FILE_WRITE_ATTRIBUTES,
-            FILE_WRITE_DATA, FILE_WRITE_EA, READ_CONTROL, SPECIFIC_RIGHTS_ALL, STANDARD_RIGHTS_ALL,
-            STANDARD_RIGHTS_EXECUTE, STANDARD_RIGHTS_READ, STANDARD_RIGHTS_REQUIRED, STANDARD_RIGHTS_WRITE,
-            SYNCHRONIZE, WRITE_DAC, WRITE_OWNER, 
+            DELETE, FILE_ACCESS_RIGHTS, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_APPEND_DATA,
+            FILE_DELETE_CHILD, FILE_EXECUTE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
+            FILE_READ_EA, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
+            READ_CONTROL, WRITE_DAC, WRITE_OWNER,
         },
     },
 };
@@ -77,37 +65,36 @@ impl default::Default for ACCESS_MASK {
     }
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub trait IntoAccessMask {
-    fn into_access_mask( self ) -> ACCESS_MASK;
+    fn into_access_mask(self) -> ACCESS_MASK;
 }
 
 impl IntoAccessMask for ACCESS_MASK {
     #[inline]
-    fn into_access_mask( self ) -> ACCESS_MASK {
+    fn into_access_mask(self) -> ACCESS_MASK {
         self
     }
 }
 
 impl IntoAccessMask for u32 {
     #[inline]
-    fn into_access_mask( self ) -> ACCESS_MASK {
+    fn into_access_mask(self) -> ACCESS_MASK {
         ACCESS_MASK(self)
     }
 }
 
 impl IntoAccessMask for FILE_ACCESS_RIGHTS {
     #[inline]
-    fn into_access_mask( self ) -> ACCESS_MASK {
+    fn into_access_mask(self) -> ACCESS_MASK {
         ACCESS_MASK(self.0)
     }
 }
 
 impl IntoAccessMask for GENERIC_ACCESS_RIGHTS {
     #[inline]
-    fn into_access_mask( self ) -> ACCESS_MASK {
+    fn into_access_mask(self) -> ACCESS_MASK {
         ACCESS_MASK(self.0)
     }
 }
@@ -127,7 +114,10 @@ pub trait AccessMaskIdents {
     const DISPLAY_MODE: AccessMaskDebugMode;
     const DISPLAY_NAME: &'static str = "";
 
-    fn to_generic( _access_mask: ACCESS_MASK, _is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
+    fn to_generic(
+        _access_mask: ACCESS_MASK,
+        _is_container: Option<bool>,
+    ) -> Option<AccessMaskGenericFlags> {
         None
     }
 
@@ -155,7 +145,7 @@ pub trait AccessMaskIdents {
         None
     }
 
-    fn generic_special_permissions( _special_permissions: ACCESS_MASK ) -> Option<DebugIdent> {
+    fn generic_special_permissions(_special_permissions: ACCESS_MASK) -> Option<DebugIdent> {
         None
     }
 
@@ -325,15 +315,25 @@ pub struct AccessMaskGenericFlags {
     other: Option<ACCESS_MASK>,
 }
 
-fn access_mask_to_file_rights_generic_flags( access_mask: ACCESS_MASK, is_directory: bool ) -> AccessMaskGenericFlags {
+fn access_mask_to_file_rights_generic_flags(
+    access_mask: ACCESS_MASK,
+    is_directory: bool,
+) -> AccessMaskGenericFlags {
     let G_WRITE = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA;
-    let G_READ = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_READ_EA | READ_CONTROL; 
+    let G_READ = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_READ_EA | READ_CONTROL;
     let G_READ_AND_EXECUTE = FILE_EXECUTE | G_READ;
     let G_MODIFY = DELETE | G_READ_AND_EXECUTE | G_WRITE;
-    let G_FULL_ACCESS = G_MODIFY | WRITE_DAC | WRITE_OWNER | if is_directory { FILE_DELETE_CHILD } else { FILE_ACCESS_RIGHTS(0) };
+    let G_FULL_ACCESS = G_MODIFY
+        | WRITE_DAC
+        | WRITE_OWNER
+        | if is_directory {
+            FILE_DELETE_CHILD
+        } else {
+            FILE_ACCESS_RIGHTS(0)
+        };
 
     let G_WRITE: ACCESS_MASK = G_WRITE.into_access_mask();
-    let G_READ: ACCESS_MASK = G_READ.into_access_mask(); 
+    let G_READ: ACCESS_MASK = G_READ.into_access_mask();
     let G_READ_AND_EXECUTE: ACCESS_MASK = G_READ_AND_EXECUTE.into_access_mask();
     let G_MODIFY: ACCESS_MASK = G_MODIFY.into_access_mask();
     let G_FULL_ACCESS: ACCESS_MASK = G_FULL_ACCESS.into_access_mask();
@@ -351,27 +351,27 @@ fn access_mask_to_file_rights_generic_flags( access_mask: ACCESS_MASK, is_direct
     let mut other = None;
 
     if standard_bits.contains(G_FULL_ACCESS) {
-        debug_assert!( !standard_bits.contains(!G_FULL_ACCESS) );
+        debug_assert!(!standard_bits.contains(!G_FULL_ACCESS));
         full_access = true;
     } else {
         if standard_bits.contains(G_MODIFY) {
             modify = true;
-            standard_bits &= !G_MODIFY;    
+            standard_bits &= !G_MODIFY;
         }
 
         if standard_bits.contains(G_READ_AND_EXECUTE) {
             read_and_execute = true;
-            standard_bits &= !G_READ_AND_EXECUTE;    
+            standard_bits &= !G_READ_AND_EXECUTE;
         }
 
         if standard_bits.contains(G_WRITE) {
             write = true;
-            standard_bits &= !G_READ_AND_EXECUTE;    
+            standard_bits &= !G_READ_AND_EXECUTE;
         }
 
         if standard_bits.contains(G_READ) {
             read = true;
-            standard_bits &= !G_READ_AND_EXECUTE;    
+            standard_bits &= !G_READ_AND_EXECUTE;
         }
 
         if standard_bits.0 != 0 {
@@ -436,22 +436,22 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
         Some(DebugIdent("GENERIC_WRITE"))
     }
 
-    fn generic_special_permissions( _special_permissions: ACCESS_MASK ) -> Option<DebugIdent> {
+    fn generic_special_permissions(_special_permissions: ACCESS_MASK) -> Option<DebugIdent> {
         Some(DebugIdent("GENERIC_SPECIAL_PERMISSIONS"))
     }
 
     fn bit_0000_0001() -> Option<DebugIdent> {
-        debug_assert!( FILE_LIST_DIRECTORY == FILE_READ_DATA );
+        debug_assert!(FILE_LIST_DIRECTORY == FILE_READ_DATA);
         Some(DebugIdent("LIST_DIRECTORY/READ_DATA"))
     }
 
     fn bit_0000_0002() -> Option<DebugIdent> {
-        debug_assert!( FILE_ADD_FILE == FILE_WRITE_DATA );
+        debug_assert!(FILE_ADD_FILE == FILE_WRITE_DATA);
         Some(DebugIdent("ADD_FILE/WRITE_DATA"))
     }
 
     fn bit_0000_0004() -> Option<DebugIdent> {
-        debug_assert!( FILE_ADD_SUBDIRECTORY == FILE_APPEND_DATA );
+        debug_assert!(FILE_ADD_SUBDIRECTORY == FILE_APPEND_DATA);
         Some(DebugIdent("ADD_SUBDIRECTORY/APPEND_DATA"))
     }
 
@@ -526,7 +526,6 @@ impl AccessMaskIdents for FileAccessRightsFullIdents {
     fn bits_001F_0000() -> Option<DebugIdent> {
         Some(DebugIdent("STANDARD_RIGHTS_ALL"))
     }
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -538,8 +537,14 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
     const DEBUG_NAME: &'static str = "ACCESS_MASK";
     const DISPLAY_MODE: AccessMaskDebugMode = AccessMaskDebugMode::PlainList;
 
-    fn to_generic( access_mask: ACCESS_MASK, is_container: Option<bool>) -> Option<AccessMaskGenericFlags> {
-        Some(access_mask_to_file_rights_generic_flags( access_mask, is_container.unwrap_or(false) ))
+    fn to_generic(
+        access_mask: ACCESS_MASK,
+        is_container: Option<bool>,
+    ) -> Option<AccessMaskGenericFlags> {
+        Some(access_mask_to_file_rights_generic_flags(
+            access_mask,
+            is_container.unwrap_or(false),
+        ))
     }
 
     fn generic_full_access() -> Option<DebugIdent> {
@@ -566,25 +571,25 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
         Some(DebugIdent("W"))
     }
 
-    fn generic_special_permissions( _special_permissions: ACCESS_MASK ) -> Option<DebugIdent> {
+    fn generic_special_permissions(_special_permissions: ACCESS_MASK) -> Option<DebugIdent> {
         Some(DebugIdent("SP"))
     }
 
     // LIST_DIRECTORY/READ_DATA
     fn bit_0000_0001() -> Option<DebugIdent> {
-        debug_assert!( FILE_LIST_DIRECTORY == FILE_READ_DATA );
+        debug_assert!(FILE_LIST_DIRECTORY == FILE_READ_DATA);
         Some(DebugIdent("LD/R"))
     }
 
     // ADD_FILE/WRITE_DATA
     fn bit_0000_0002() -> Option<DebugIdent> {
-        debug_assert!( FILE_ADD_FILE == FILE_WRITE_DATA );
+        debug_assert!(FILE_ADD_FILE == FILE_WRITE_DATA);
         Some(DebugIdent("AF/W"))
     }
 
     // ADD_SUBDIRECTORY/APPEND_DATA
     fn bit_0000_0004() -> Option<DebugIdent> {
-        debug_assert!( FILE_ADD_SUBDIRECTORY == FILE_APPEND_DATA );
+        debug_assert!(FILE_ADD_SUBDIRECTORY == FILE_APPEND_DATA);
         Some(DebugIdent("AD/A"))
     }
 
@@ -677,7 +682,6 @@ impl AccessMaskIdents for FileAccessRightsShortIdents {
     fn bits_001F_0000() -> Option<DebugIdent> {
         Some(DebugIdent("STDA"))
     }
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -699,64 +703,67 @@ macro_rules! fmt_tuple {
         if let Some(ident) = N::$ident($value) {
             $f.field(&ident);
         }
-    }
+    };
 }
 macro_rules! fmt_plain_list {
     ($mask:expr, $ident:ident, $access_mask:expr, $f:ident, $first_item:ident) => {
         if let Some(ident) = N::$ident() {
             if $access_mask.contains(ACCESS_MASK($mask)) {
                 if $first_item {
-                    #[allow(unused_assignments)] {
+                    #[allow(unused_assignments)]
+                    {
                         $first_item = false;
                     }
                 } else {
-                    write!( $f, ", " )?;
+                    write!($f, ", ")?;
                 }
 
-                write!( $f, "{:?}", ident )?;
+                write!($f, "{:?}", ident)?;
             }
         }
     };
     (g: $ident:ident, $f:ident, $first_item:ident) => {
         if let Some(ident) = N::$ident() {
             if $first_item {
-                #[allow(unused_assignments)] {
+                #[allow(unused_assignments)]
+                {
                     $first_item = false;
                 }
             } else {
-                write!( $f, ", " )?;
+                write!($f, ", ")?;
             }
 
-            write!( $f, "{:?}", ident )?;
+            write!($f, "{:?}", ident)?;
         }
     };
     (gsp: $ident:ident, $value:expr, $f:ident, $first_item:ident) => {
         if let Some(ident) = N::$ident($value) {
             if $first_item {
-                #[allow(unused_assignments)] {
+                #[allow(unused_assignments)]
+                {
                     $first_item = false;
                 }
             } else {
-                write!( $f, ", " )?;
+                write!($f, ", ")?;
             }
 
-            write!( $f, "{:?}", ident )?;
+            write!($f, "{:?}", ident)?;
         }
-    }
+    };
 }
 
-pub struct FileAccessRightsRepresenter<N: AccessMaskIdents>{ 
+pub struct FileAccessRightsRepresenter<N: AccessMaskIdents> {
     pub access_mask: ACCESS_MASK,
     pub is_container: Option<bool>,
     pub _ph: PhantomData<N>,
 }
 
 impl<N: AccessMaskIdents> FileAccessRightsRepresenter<N> {
-    pub fn new( access_mask: ACCESS_MASK, is_container: Option<bool> ) -> Self {
+    pub fn new(access_mask: ACCESS_MASK, is_container: Option<bool>) -> Self {
         Self {
             access_mask,
             is_container,
-            _ph: PhantomData, 
+            _ph: PhantomData,
         }
     }
 

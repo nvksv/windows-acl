@@ -2,71 +2,40 @@
 
 #![allow(non_snake_case)]
 
-use core::fmt;
 use std::{
-    cell::LazyCell, ffi::{OsStr, c_void}, iter::once, mem, ops::Drop, os::windows::ffi::OsStrExt, ptr
+    cell::LazyCell,
+    mem,
+    ops::Drop,
+    ptr,
+};
+use windows::Win32::{
+    Foundation::LUID,
+    Security::{
+        GetTokenInformation, TokenPrivileges,
+        SE_ASSIGNPRIMARYTOKEN_NAME, SE_AUDIT_NAME,
+        SE_BACKUP_NAME, SE_CHANGE_NOTIFY_NAME, SE_CREATE_GLOBAL_NAME, SE_CREATE_PAGEFILE_NAME,
+        SE_CREATE_PERMANENT_NAME, SE_CREATE_SYMBOLIC_LINK_NAME, SE_CREATE_TOKEN_NAME,
+        SE_DEBUG_NAME, SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME, SE_ENABLE_DELEGATION_NAME,
+        SE_IMPERSONATE_NAME, SE_INCREASE_QUOTA_NAME, SE_INC_BASE_PRIORITY_NAME,
+        SE_INC_WORKING_SET_NAME, SE_LOAD_DRIVER_NAME, SE_LOCK_MEMORY_NAME, SE_MACHINE_ACCOUNT_NAME,
+        SE_MANAGE_VOLUME_NAME, SE_PROF_SINGLE_PROCESS_NAME, SE_RELABEL_NAME,
+        SE_REMOTE_SHUTDOWN_NAME, SE_RESTORE_NAME, SE_SECURITY_NAME, SE_SHUTDOWN_NAME,
+        SE_SYNC_AGENT_NAME, SE_SYSTEMTIME_NAME, SE_SYSTEM_ENVIRONMENT_NAME, SE_SYSTEM_PROFILE_NAME,
+        SE_TAKE_OWNERSHIP_NAME, SE_TCB_NAME, SE_TIME_ZONE_NAME, SE_TRUSTED_CREDMAN_ACCESS_NAME,
+        SE_UNDOCK_NAME, SE_UNSOLICITED_INPUT_NAME, 
+    },
 };
 use windows::{
+    core::{Error, Result, PCWSTR},
     Win32::{
-        Foundation::{
-            CloseHandle, HANDLE, INVALID_HANDLE_VALUE
-        }, Security::{
-            ACL as _ACL, AddResourceAttributeAce, AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY 
-        }, System::{
-            Threading::{
-                GetCurrentProcess, OpenProcessToken,
-            },
-            WindowsProgramming::GetUserNameW,
-        }
-    }, core::{
-        Error, HRESULT, PCWSTR, PWSTR, Result
-    }
-};
-use windows::{
-    Win32::{
-        Foundation::{
-            LUID,
-        },
+        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
         Security::{
-            Authorization::{
-                SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
-                SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
-            },
-            AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce,
-            GetAce, GetAclInformation, InitializeAcl, IsValidAcl,
-            AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
-            ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE,
-            ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE,
-            ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
-            FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, 
-            SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE,
-            SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE,
-            SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, ACE_HEADER, ACE_FLAGS,
-            SE_ASSIGNPRIMARYTOKEN_NAME, SE_AUDIT_NAME, SE_BACKUP_NAME, SE_CHANGE_NOTIFY_NAME, SE_CREATE_GLOBAL_NAME,
-            SE_CREATE_PAGEFILE_NAME, SE_CREATE_PERMANENT_NAME, SE_CREATE_SYMBOLIC_LINK_NAME, SE_CREATE_TOKEN_NAME,
-            SE_DEBUG_NAME, SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME, SE_ENABLE_DELEGATION_NAME, 
-            SE_IMPERSONATE_NAME, SE_INC_BASE_PRIORITY_NAME, SE_INCREASE_QUOTA_NAME, SE_INC_WORKING_SET_NAME, 
-            SE_LOAD_DRIVER_NAME, SE_LOCK_MEMORY_NAME, SE_MACHINE_ACCOUNT_NAME, SE_MANAGE_VOLUME_NAME, 
-            SE_PROF_SINGLE_PROCESS_NAME, SE_RELABEL_NAME, SE_REMOTE_SHUTDOWN_NAME, SE_RESTORE_NAME, 
-            SE_SECURITY_NAME, SE_SHUTDOWN_NAME, SE_SYNC_AGENT_NAME, SE_SYSTEM_ENVIRONMENT_NAME, 
-            SE_SYSTEM_PROFILE_NAME, SE_SYSTEMTIME_NAME, SE_TAKE_OWNERSHIP_NAME, SE_TCB_NAME, SE_TIME_ZONE_NAME, 
-            SE_TRUSTED_CREDMAN_ACCESS_NAME, SE_UNDOCK_NAME, SE_UNSOLICITED_INPUT_NAME, TokenPrivileges,
-            GetTokenInformation,
+            AdjustTokenPrivileges, LookupPrivilegeValueW,
+            LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
+            TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY,
         },
         System::{
-            Threading::{
-                
-            },
-            SystemServices::{
-                ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, 
-                ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, 
-                ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, MAXDWORD, 
-                SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, 
-                SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
-            },
-        },
-        Storage::FileSystem::{
-            // FILE_ACCESS_RIGHTS,
+            Threading::{GetCurrentProcess, OpenProcessToken},
         },
     },
 };
@@ -77,10 +46,10 @@ use super::api::ErrorExt;
 
 macro_rules! privileges {
     ($({
-        $name:expr, 
+        $name:expr,
         $luid:ident,
-        $field_name: ident, 
-        $new_fn_name:ident, 
+        $field_name: ident,
+        $new_fn_name:ident,
         $with_fn_name:ident
     }),+) => {
         $(
@@ -107,17 +76,17 @@ macro_rules! privileges {
             $(
                 pub fn $new_fn_name() -> Result<Self> {
                     let mut tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
-                    
+
                     tkp.PrivilegeCount = 1;
-                    tkp.Privileges[0].Attributes    = TOKEN_PRIVILEGES_ATTRIBUTES(0); 
-                    tkp.Privileges[0].Luid          = $luid.ok_or_else(|| Error::empty())?; 
+                    tkp.Privileges[0].Attributes    = TOKEN_PRIVILEGES_ATTRIBUTES(0);
+                    tkp.Privileges[0].Luid          = $luid.ok_or_else(|| Error::empty())?;
 
                     Ok(Self {
                         tkp,
                         previous_tkp: unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() },
                         privilege_was_acquired: false,
                     })
-                }    
+                }
 
                 pub fn $with_fn_name<F, R, E>( f: F ) -> ::core::result::Result<R, E>
                 where
@@ -137,11 +106,11 @@ macro_rules! privileges {
             pub fn get_avaliable() -> Result<AvailablePrivileges> {
                 let h_current_process = unsafe { GetCurrentProcess() };
                 let mut h_process_token: HANDLE = HANDLE(ptr::null_mut());
-                
+
                 unsafe {
                     OpenProcessToken(
-                        h_current_process, 
-                        TOKEN_QUERY, 
+                        h_current_process,
+                        TOKEN_QUERY,
                         &mut h_process_token
                     )?;
                 }
@@ -221,11 +190,9 @@ macro_rules! privileges {
     };
 }
 
-
-
 privileges!(
     {
-        SE_ASSIGNPRIMARYTOKEN_NAME, 
+        SE_ASSIGNPRIMARYTOKEN_NAME,
         SE_ASSIGNPRIMARYTOKEN_LUID,
         assign_primary_token,
         new_assign_primary_token,
@@ -234,90 +201,90 @@ privileges!(
     {
         SE_AUDIT_NAME,
         SE_AUDIT_LUID,
-        audit, 
+        audit,
         new_audit,
         with_audit
     },
     {
         SE_BACKUP_NAME,
         SE_BACKUP_LUID,
-        backup, 
+        backup,
         new_backup,
         with_backup
     },
     {
         SE_CHANGE_NOTIFY_NAME,
-        SE_CHANGE_NOTIFY_LUID, 
+        SE_CHANGE_NOTIFY_LUID,
         change_notify,
         new_change_notify,
         with_change_notify
     },
     {
         SE_CREATE_GLOBAL_NAME,
-        SE_CREATE_GLOBAL_LUID, 
+        SE_CREATE_GLOBAL_LUID,
         create_global,
         new_create_global,
         with_create_global
     },
     {
         SE_CREATE_PAGEFILE_NAME,
-        SE_CREATE_PAGEFILE_LUID, 
+        SE_CREATE_PAGEFILE_LUID,
         create_pagefile,
         new_create_pagefile,
         with_create_pagefile
     },
     {
         SE_CREATE_PERMANENT_NAME,
-        SE_CREATE_PERMANENT_LUID, 
+        SE_CREATE_PERMANENT_LUID,
         create_permanent,
         new_create_permanent,
         with_create_permanent
     },
     {
         SE_CREATE_SYMBOLIC_LINK_NAME,
-        SE_CREATE_SYMBOLIC_LINK_LUID, 
+        SE_CREATE_SYMBOLIC_LINK_LUID,
         create_symbolic_link,
         new_create_symbolic_link,
         with_create_symbolic_link
     },
     {
         SE_CREATE_TOKEN_NAME,
-        SE_CREATE_TOKEN_LUID, 
+        SE_CREATE_TOKEN_LUID,
         create_token,
         new_create_token,
         with_create_token
     },
     {
         SE_DEBUG_NAME,
-        SE_DEBUG_LUID, 
+        SE_DEBUG_LUID,
         debug,
         new_debug,
         with_debug
     },
     {
         SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME,
-        SE_DELEGATE_SESSION_USER_IMPERSONATE_LUID, 
+        SE_DELEGATE_SESSION_USER_IMPERSONATE_LUID,
         delegate_session_user_impersonate,
         new_delegate_session_user_impersonate,
         with_delegate_session_user_impersonate
     },
     {
         SE_ENABLE_DELEGATION_NAME,
-        SE_ENABLE_DELEGATION_LUID, 
+        SE_ENABLE_DELEGATION_LUID,
         enable_delegation,
         new_enable_delegation,
         with_enable_delegation
     },
     {
         SE_IMPERSONATE_NAME,
-        SE_IMPERSONATE_LUID, 
+        SE_IMPERSONATE_LUID,
         impersonate,
         new_impersonate,
         with_impersonate
     },
     {
         SE_INC_BASE_PRIORITY_NAME,
-        SE_INC_BASE_PRIORITY_LUID, 
+        SE_INC_BASE_PRIORITY_LUID,
         increase_base_priority,
         new_increase_base_priority,
         with_increase_base_priority
@@ -478,30 +445,23 @@ privileges!(
     }
 );
 
-fn lookup_privilege_value( privilege_name: PCWSTR ) -> Option<LUID> {
+fn lookup_privilege_value(privilege_name: PCWSTR) -> Option<LUID> {
     let mut privilege_luid = LUID::default();
 
-    unsafe {
-        LookupPrivilegeValueW(
-            PCWSTR::null(),
-            privilege_name,
-            &mut privilege_luid,
-        )
-    }.ok()?;
+    unsafe { LookupPrivilegeValueW(PCWSTR::null(), privilege_name, &mut privilege_luid) }.ok()?;
 
     Some(privilege_luid)
 }
 
-fn get_privilege_enabled_tkp( privilege_luid: LUID ) -> TOKEN_PRIVILEGES {
+fn get_privilege_enabled_tkp(privilege_luid: LUID) -> TOKEN_PRIVILEGES {
     let mut tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
-    
+
     tkp.PrivilegeCount = 1;
-    tkp.Privileges[0].Attributes    = SE_PRIVILEGE_ENABLED; 
-    tkp.Privileges[0].Luid          = privilege_luid; 
+    tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    tkp.Privileges[0].Luid = privilege_luid;
 
     tkp
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -513,11 +473,10 @@ pub struct Privilege {
 }
 
 impl Privilege {
-
     // pub fn by_name(name: &str) -> Result<Self> {
     //     let mut tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
     //     let mut previous_tkp = unsafe { mem::zeroed::<TOKEN_PRIVILEGES>() };
-        
+
     //     tkp.PrivilegeCount = 1;
     //     previous_tkp.PrivilegeCount = 1;
 
@@ -539,12 +498,12 @@ impl Privilege {
     //     })
     // }
 
-    pub fn acquire( &mut self ) -> Result<()> {
+    pub fn acquire(&mut self) -> Result<()> {
         if self.privilege_was_acquired {
             unreachable!()
         }
 
-        self.adjust_privilege( true )?;
+        self.adjust_privilege(true)?;
 
         self.privilege_was_acquired = true;
         Ok(())
@@ -561,8 +520,7 @@ impl Privilege {
         Ok(())
     }
 
-    fn adjust_privilege( &mut self, enabled: bool ) -> Result<()> {
-
+    fn adjust_privilege(&mut self, enabled: bool) -> Result<()> {
         if enabled {
             self.tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
         } else {
@@ -580,7 +538,7 @@ impl Privilege {
 
         let mut previous_state_length: u32 = 0;
 
-        match unsafe { 
+        match unsafe {
             AdjustTokenPrivileges(
                 hToken,
                 false,
@@ -590,11 +548,11 @@ impl Privilege {
                 Some(&mut previous_state_length),
             )
         } {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => {
                 let _ = unsafe { CloseHandle(hToken) };
                 return Err(e);
-            },
+            }
         };
 
         unsafe { CloseHandle(hToken) }?;
@@ -602,8 +560,7 @@ impl Privilege {
         Ok(())
     }
 
-    fn restore_privilege( &mut self ) -> Result<()> {
-
+    fn restore_privilege(&mut self) -> Result<()> {
         let mut hToken: HANDLE = INVALID_HANDLE_VALUE;
         unsafe {
             OpenProcessToken(
@@ -613,21 +570,14 @@ impl Privilege {
             )
         }?;
 
-        match unsafe { 
-            AdjustTokenPrivileges(
-                hToken,
-                false,
-                Some(&mut self.previous_tkp),
-                0,
-                None,
-                None,
-            )
+        match unsafe {
+            AdjustTokenPrivileges(hToken, false, Some(&mut self.previous_tkp), 0, None, None)
         } {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => {
                 let _ = unsafe { CloseHandle(hToken) };
                 return Err(e);
-            },
+            }
         };
 
         unsafe { CloseHandle(hToken) }?;
@@ -643,5 +593,3 @@ impl Drop for Privilege {
         }
     }
 }
-
-

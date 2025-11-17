@@ -1,38 +1,30 @@
 #![allow(non_snake_case)]
 
-use core::{
-    ffi::c_void, fmt, mem, ptr::null_mut, slice, cmp, hash, fmt::Debug,
-};
-use std::{
-    ffi::{OsStr, OsString}, str::FromStr, ops::Deref,
-};
 use crate::{
-    utils::{DebugUnpretty, MaybePtr, u16cstr_as_pcwstr, u16str_as_pwstr, pwstr_as_u16str},
+    utils::{pwstr_as_u16str, u16cstr_as_pcwstr, MaybePtr},
     winapi::api::ErrorExt,
 };
+use ::widestring::{U16CString, U16String};
+use core::{cmp, ffi::c_void, fmt, fmt::Debug, hash, ptr::null_mut, slice};
+use std::{
+    ffi::{OsStr, OsString},
+    ops::Deref,
+    str::FromStr,
+};
 use windows::{
-    core::{
-        Error, Result, HRESULT, PWSTR, PCWSTR,
-    },
+    core::{Error, Result, PCWSTR, PWSTR},
     Win32::{
-        Foundation::{
-            CloseHandle, LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL
-        },
+        Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL},
         Security::{
-            Authorization::{
-                ConvertSidToStringSidW, ConvertStringSidToSidW,
-            }, 
-            CopySid, CreateWellKnownSid, EqualSid, GetLengthSid, GetTokenInformation, 
-            GetWindowsAccountDomainSid, IsValidSid, LookupAccountNameW, TokenUser, PSID, 
-            SID_NAME_USE, TOKEN_QUERY, WELL_KNOWN_SID_TYPE, SID_AND_ATTRIBUTES, 
-            SECURITY_MAX_SID_SIZE, LookupAccountSidW,
+            Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW},
+            CopySid, CreateWellKnownSid, EqualSid, GetLengthSid, GetTokenInformation,
+            GetWindowsAccountDomainSid, IsValidSid, LookupAccountNameW, LookupAccountSidW,
+            TokenUser, PSID, SID_AND_ATTRIBUTES, SID_NAME_USE, TOKEN_QUERY,
+            WELL_KNOWN_SID_TYPE,
         },
-        System::Threading::{
-                GetCurrentProcess, OpenProcessToken,
-            },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
     },
 };
-use ::widestring::{U16CString, U16CStr, U16String, U16Str};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -40,14 +32,14 @@ use ::widestring::{U16CString, U16CStr, U16String, U16Str};
 /// Guaranted to be non-null and valid. Size is precalculated.
 #[derive(Hash)]
 #[repr(transparent)]
-pub struct SIDRef( [u8] );
+pub struct SIDRef([u8]);
 
 impl SIDRef {
-    fn from_slice( sid: &[u8] ) -> &SIDRef {
-        unsafe { &* (sid as *const [u8] as *const Self) }
+    fn from_slice(sid: &[u8]) -> &SIDRef {
+        unsafe { &*(sid as *const [u8] as *const Self) }
     }
 
-    pub fn from_psid<'s>( psid: PSID ) -> Result<Option<&'s Self>> {
+    pub fn from_psid<'s>(psid: PSID) -> Result<Option<&'s Self>> {
         if psid.is_invalid() {
             return Ok(None);
         }
@@ -60,64 +52,55 @@ impl SIDRef {
         Ok(Some(sid))
     }
 
-    pub unsafe fn from_psid_unchecked<'s>( psid: PSID ) -> Result<&'s Self> {
+    pub unsafe fn from_psid_unchecked<'s>(psid: PSID) -> Result<&'s Self> {
         let sid_size = unsafe { GetLengthSid(psid) };
 
-        let sid = unsafe { slice::from_raw_parts( psid.0 as *const u8, sid_size as usize ) };
+        let sid = unsafe { slice::from_raw_parts(psid.0 as *const u8, sid_size as usize) };
 
         Ok(Self::from_slice(sid))
     }
 
-    pub fn to_sid( &self ) -> Result<SID> {
+    pub fn to_sid(&self) -> Result<SID> {
         let psid = self.psid();
         let sid_size = self.len();
 
-        let mut sid= [0_u8].repeat(sid_size as usize);
+        let mut sid = [0_u8].repeat(sid_size as usize);
 
-        unsafe { 
-            CopySid(
-                sid_size, 
-                PSID(sid.as_mut_ptr() as *mut c_void), 
-                psid
-            )
-        }?;
+        unsafe { CopySid(sid_size, PSID(sid.as_mut_ptr() as *mut c_void), psid) }?;
 
-        Ok(SID { 
-            sid
-        })
+        Ok(SID { sid })
     }
 
-    pub fn as_vsid( &self ) -> VSID<'_> {
+    pub fn as_vsid(&self) -> VSID<'_> {
         VSID::Ptr(self)
     }
 
-    pub fn to_owned_vsid( &self ) -> Result<VSID<'static>> {
+    pub fn to_owned_vsid(&self) -> Result<VSID<'static>> {
         let sid = self.to_sid()?;
         Ok(VSID::Value(sid))
     }
 
-    pub fn to_account_name_or_sid( &self ) -> Result<OsString> {
+    pub fn to_account_name_or_sid(&self) -> Result<OsString> {
         match self.lookup_account_name(None) {
             Ok((name, mut domain_name)) => {
                 let s = if !domain_name.is_empty() {
-                    domain_name.push("\\");   
-                    domain_name.push(&name);   
+                    domain_name.push("\\");
+                    domain_name.push(&name);
                     domain_name
                 } else {
                     name
                 };
                 Ok(s)
-            },
-            Err(_) => {
-                self.to_os_string()
             }
+            Err(_) => self.to_os_string(),
         }
     }
 
-    pub fn lookup_account_name( &self, domain_name: Option<&OsStr> ) -> Result<(OsString, OsString)> {
+    pub fn lookup_account_name(&self, domain_name: Option<&OsStr>) -> Result<(OsString, OsString)> {
+        let domain_name =
+            domain_name.map(|domain_name| U16CString::from_os_str_truncate(domain_name));
         let domain_name = domain_name
-            .map(|domain_name| U16CString::from_os_str_truncate(domain_name));
-        let domain_name = domain_name.as_ref()
+            .as_ref()
             .map(|domain_name| u16cstr_as_pcwstr(domain_name))
             .unwrap_or(PCWSTR::null());
 
@@ -133,16 +116,16 @@ impl SIDRef {
                 &mut name_len,
                 None,
                 &mut referenced_domain_name_len,
-                &mut sid_type
+                &mut sid_type,
             )
         } {
             Ok(()) => {
                 return Err(Error::empty());
-            },
-            Err(e) if e.is_insufficient_buffer() => {},
+            }
+            Err(e) if e.is_insufficient_buffer() => {}
             Err(e) => {
                 return Err(e);
-            },
+            }
         };
 
         let mut name_vec = vec![0_u16; name_len as usize];
@@ -159,12 +142,13 @@ impl SIDRef {
                 &mut name_len,
                 Some(referenced_domain_name),
                 &mut referenced_domain_name_len,
-                &mut sid_type
+                &mut sid_type,
             )
         }?;
 
         let name = U16CString::from_vec_truncate(name_vec).to_os_string();
-        let referenced_domain_name = U16CString::from_vec_truncate(referenced_domain_name_vec).to_os_string();
+        let referenced_domain_name =
+            U16CString::from_vec_truncate(referenced_domain_name_vec).to_os_string();
 
         Ok((name, referenced_domain_name))
     }
@@ -176,24 +160,19 @@ impl SIDRef {
     ///
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
-    pub fn to_os_string( &self ) -> Result<OsString> {
+    pub fn to_os_string(&self) -> Result<OsString> {
         let psid = self.psid();
         if psid.is_invalid() {
             return Err(Error::empty());
         }
 
         let mut raw_string_sid: PWSTR = PWSTR::null();
-        unsafe { 
-            ConvertSidToStringSidW( 
-                psid, 
-                &mut raw_string_sid
-            ) 
-        }?;
+        unsafe { ConvertSidToStringSidW(psid, &mut raw_string_sid) }?;
         if raw_string_sid.is_null() {
             return Err(Error::empty());
         }
 
-        let string_sid = unsafe { &* pwstr_as_u16str(raw_string_sid) };
+        let string_sid = unsafe { &*pwstr_as_u16str(raw_string_sid) };
         let string_sid = string_sid.to_os_string();
 
         unsafe { LocalFree(Some(HLOCAL(raw_string_sid.as_ptr() as *mut c_void))) };
@@ -201,29 +180,23 @@ impl SIDRef {
         Ok(string_sid)
     }
 
-    pub fn to_string( &self ) -> Result<String> {
+    pub fn to_string(&self) -> Result<String> {
         let s = self.to_os_string()?;
         Ok(s.to_string_lossy().to_string())
     }
 
-    pub fn get_domain_of( &self ) -> Result<SID> {
+    pub fn get_domain_of(&self) -> Result<SID> {
         let psid = self.psid();
         let mut domain_sid_size: u32 = 0;
 
-        match unsafe {
-            GetWindowsAccountDomainSid(
-                psid, 
-                None, 
-                &mut domain_sid_size,
-            )        
-        } {
+        match unsafe { GetWindowsAccountDomainSid(psid, None, &mut domain_sid_size) } {
             Ok(()) => {
                 return Err(Error::empty());
-            },
-            Err(e) if e.is_insufficient_buffer() => {},
+            }
+            Err(e) if e.is_insufficient_buffer() => {}
             Err(e) => {
                 return Err(e);
-            },
+            }
         };
 
         if domain_sid_size == 0 {
@@ -234,48 +207,45 @@ impl SIDRef {
 
         unsafe {
             GetWindowsAccountDomainSid(
-                psid, 
+                psid,
                 Some(PSID(domain_sid.as_mut_ptr() as *mut c_void)),
-                &mut domain_sid_size
-            )        
+                &mut domain_sid_size,
+            )
         }?;
 
         unsafe { domain_sid.set_len(domain_sid_size as usize) };
 
-        Ok(SID {
-            sid: domain_sid,
-        })
-
+        Ok(SID { sid: domain_sid })
     }
 
     //
 
     #[inline]
-    pub fn len( &self ) -> u32 {
+    pub fn len(&self) -> u32 {
         self.0.len() as u32
     }
-    
+
     //
 
-    pub fn eq_to_psid( &self, other: PSID ) -> bool {
+    pub fn eq_to_psid(&self, other: PSID) -> bool {
         if other.is_invalid() || !unsafe { IsValidSid(other) }.as_bool() {
             return false;
         }
 
-        unsafe { EqualSid( self.psid(), other) }.is_ok()
+        unsafe { EqualSid(self.psid(), other) }.is_ok()
     }
 
     #[inline]
-    pub fn eq( &self, other: &Self ) -> bool {
-        unsafe { EqualSid( self.psid(), other.psid() ) }.is_ok()
+    pub fn eq(&self, other: &Self) -> bool {
+        unsafe { EqualSid(self.psid(), other.psid()) }.is_ok()
     }
 
-    pub fn cmp_to_psid( &self, other: PSID ) -> Option<cmp::Ordering> {
+    pub fn cmp_to_psid(&self, other: PSID) -> Option<cmp::Ordering> {
         let Some(other_sidref) = Self::from_psid(other).ok()? else {
             return Some(cmp::Ordering::Greater);
         };
 
-        if self.eq( other_sidref ) {
+        if self.eq(other_sidref) {
             return Some(cmp::Ordering::Equal);
         }
 
@@ -283,21 +253,22 @@ impl SIDRef {
     }
 
     #[inline]
-    pub fn cmp( &self, other: &Self ) -> Option<cmp::Ordering> {
-        PartialOrd::partial_cmp( &self.0, &other.0 )
+    pub fn cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        PartialOrd::partial_cmp(&self.0, &other.0)
     }
 
     //
 
     #[inline(always)]
-    pub fn psid( &self ) -> PSID {
+    pub fn psid(&self) -> PSID {
         PSID(self.0.as_ptr() as *mut c_void)
     }
 }
 
 impl fmt::Debug for SIDRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = self.to_account_name_or_sid()
+        let s = self
+            .to_account_name_or_sid()
             .map_err(|_| fmt::Error::default())?;
 
         f.write_fmt(format_args!("SIDRef({:?})", s))
@@ -326,11 +297,11 @@ pub struct SID {
 }
 
 impl SID {
-    pub fn from_ref( r: &SIDRef ) -> Result<Self> {
+    pub fn from_ref(r: &SIDRef) -> Result<Self> {
         r.to_sid()
     }
 
-    pub fn from_psid( psid: PSID ) -> Result<Self> {
+    pub fn from_psid(psid: PSID) -> Result<Self> {
         if psid.is_invalid() {
             return Err(Error::empty());
         }
@@ -341,41 +312,36 @@ impl SID {
         let sid_size = unsafe { GetLengthSid(psid) };
         let mut sid: Vec<u8> = vec![0_u8; sid_size as usize];
 
-        unsafe { 
-            CopySid(
-                sid_size, 
-                PSID(sid.as_mut_ptr() as *mut c_void), 
-                psid
-            )
-        }?;
+        unsafe { CopySid(sid_size, PSID(sid.as_mut_ptr() as *mut c_void), psid) }?;
 
         unsafe { sid.set_len(sid_size as usize) };
 
-        let this = Self { 
-            sid
-        };
+        let this = Self { sid };
 
         Ok(this)
     }
 
-    pub fn well_known( well_known_sid_type: WELL_KNOWN_SID_TYPE, domain_sid: Option<&SID> ) -> Result<Self> {
+    pub fn well_known(
+        well_known_sid_type: WELL_KNOWN_SID_TYPE,
+        domain_sid: Option<&SID>,
+    ) -> Result<Self> {
         let mut sid_size: u32 = 0;
 
         match unsafe {
             CreateWellKnownSid(
-                well_known_sid_type, 
-                domain_sid.map(|sid| sid.psid()), 
+                well_known_sid_type,
+                domain_sid.map(|sid| sid.psid()),
                 None,
-                &mut sid_size
-            )        
+                &mut sid_size,
+            )
         } {
             Ok(()) => {
                 return Err(Error::empty());
-            },
-            Err(e) if e.is_insufficient_buffer() => {},
+            }
+            Err(e) if e.is_insufficient_buffer() => {}
             Err(e) => {
                 return Err(e);
-            },
+            }
         };
 
         if sid_size == 0 {
@@ -386,61 +352,47 @@ impl SID {
 
         unsafe {
             CreateWellKnownSid(
-                well_known_sid_type, 
-                domain_sid.map(|sid| sid.psid()), 
+                well_known_sid_type,
+                domain_sid.map(|sid| sid.psid()),
                 Some(PSID(sid.as_mut_ptr() as *mut c_void)),
-                &mut sid_size
-            )        
+                &mut sid_size,
+            )
         }?;
 
-        assert!( sid_size as usize <= sid.capacity() );
+        assert!(sid_size as usize <= sid.capacity());
         unsafe { sid.set_len(sid_size as usize) };
 
-        Ok(Self {
-            sid
-        })
+        Ok(Self { sid })
     }
 
     pub fn current_user() -> Result<Self> {
         let hProcess = unsafe { GetCurrentProcess() };
-        
+
         let mut hToken: HANDLE = HANDLE(null_mut());
-        unsafe {
-            OpenProcessToken( 
-                hProcess, 
-                TOKEN_QUERY, 
-                &mut hToken
-            )
-        }?;
+        unsafe { OpenProcessToken(hProcess, TOKEN_QUERY, &mut hToken) }?;
 
         //
 
         let mut sid_and_attributes_size: u32 = 0;
 
         match unsafe {
-            GetTokenInformation(
-                hToken, 
-                TokenUser, 
-                None,
-                0, 
-                &mut sid_and_attributes_size
-            )        
+            GetTokenInformation(hToken, TokenUser, None, 0, &mut sid_and_attributes_size)
         } {
             Ok(()) => {
-                let _ = unsafe { CloseHandle( hToken ) };
-                let _ = unsafe { CloseHandle( hProcess ) };
+                let _ = unsafe { CloseHandle(hToken) };
+                let _ = unsafe { CloseHandle(hProcess) };
                 return Err(Error::empty());
-            },
-            Err(e) if e.is_insufficient_buffer() => {},
+            }
+            Err(e) if e.is_insufficient_buffer() => {}
             Err(e) => {
-                let _ = unsafe { CloseHandle( hToken ) };
-                let _ = unsafe { CloseHandle( hProcess ) };
+                let _ = unsafe { CloseHandle(hToken) };
+                let _ = unsafe { CloseHandle(hProcess) };
                 return Err(e);
-            },
+            }
         };
 
         if sid_and_attributes_size == 0 {
-            unsafe { CloseHandle( hProcess ) }?;
+            unsafe { CloseHandle(hProcess) }?;
             return Err(Error::empty());
         }
 
@@ -448,29 +400,29 @@ impl SID {
 
         match unsafe {
             GetTokenInformation(
-                hToken, 
-                TokenUser, 
+                hToken,
+                TokenUser,
                 Some(sid_and_attributes_buf.as_mut_ptr() as *mut c_void),
-                sid_and_attributes_size, 
-                &mut sid_and_attributes_size
-            )        
+                sid_and_attributes_size,
+                &mut sid_and_attributes_size,
+            )
         } {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => {
-                let _ = unsafe { CloseHandle( hProcess ) };
+                let _ = unsafe { CloseHandle(hProcess) };
                 return Err(e);
             }
         };
 
-        unsafe { CloseHandle( hToken ) }?;
-        unsafe { CloseHandle( hProcess ) }?;
+        unsafe { CloseHandle(hToken) }?;
+        unsafe { CloseHandle(hProcess) }?;
 
         unsafe { sid_and_attributes_buf.set_len(sid_and_attributes_size as usize) };
 
         //
 
         let sid_and_attributes = sid_and_attributes_buf.as_ptr() as *const SID_AND_ATTRIBUTES;
-        let psid = unsafe{ (*sid_and_attributes).Sid };
+        let psid = unsafe { (*sid_and_attributes).Sid };
 
         //
 
@@ -489,13 +441,17 @@ impl SID {
     ///
     /// **Note**: If the error code is 0, `GetLastError()` returned `ERROR_INSUFFICIENT_BUFFER` after invoking `LookupAccountNameW` or
     ///         the `sid_size` is 0.
-    pub fn from_account_name(name: &OsStr, system_name: Option<&OsStr>) -> Result<(Self, OsString)> {
+    pub fn from_account_name(
+        name: &OsStr,
+        system_name: Option<&OsStr>,
+    ) -> Result<(Self, OsString)> {
         let name = U16CString::from_os_str_truncate(name);
         let name = u16cstr_as_pcwstr(&name);
 
-        let system_name: Option<U16CString> = system_name
-            .map(|system_name| U16CString::from_os_str_truncate(system_name));
-        let system_name: PCWSTR = system_name.as_ref()
+        let system_name: Option<U16CString> =
+            system_name.map(|system_name| U16CString::from_os_str_truncate(system_name));
+        let system_name: PCWSTR = system_name
+            .as_ref()
             .map(|system_name| u16cstr_as_pcwstr(system_name))
             .unwrap_or_else(|| PCWSTR::null());
 
@@ -504,7 +460,7 @@ impl SID {
 
         let mut domain_name_size: u32 = 0;
 
-        match unsafe { 
+        match unsafe {
             LookupAccountNameW(
                 system_name,
                 name,
@@ -517,11 +473,11 @@ impl SID {
         } {
             Ok(()) => {
                 return Err(Error::empty());
-            },
-            Err(e) if e.is_insufficient_buffer() => {},
+            }
+            Err(e) if e.is_insufficient_buffer() => {}
             Err(e) => {
                 return Err(e);
-            },
+            }
         };
 
         if sid_size == 0 {
@@ -543,7 +499,7 @@ impl SID {
             )
         }?;
 
-        assert!( sid_size as usize <= sid.capacity() );
+        assert!(sid_size as usize <= sid.capacity());
         unsafe { sid.set_len(sid_size as usize) };
 
         let domain_name = if domain_name_size > 0 {
@@ -552,9 +508,7 @@ impl SID {
             OsString::new()
         };
 
-        let sid = Self {
-            sid
-        };
+        let sid = Self { sid };
 
         Ok((sid, domain_name))
     }
@@ -571,32 +525,19 @@ impl SID {
         let raw_string_sid = u16cstr_as_pcwstr(&raw_string_sid);
 
         let mut psid: PSID = PSID(null_mut());
-        unsafe { 
-            ConvertStringSidToSidW(
-                raw_string_sid, 
-                &mut psid
-            ) 
-        }?;
+        unsafe { ConvertStringSidToSidW(raw_string_sid, &mut psid) }?;
 
         let size = unsafe { GetLengthSid(psid) };
         let mut sid: Vec<u8> = vec![0_u8; size as usize];
 
-        unsafe { 
-            CopySid(
-                size, 
-                PSID(sid.as_mut_ptr() as *mut c_void), 
-                psid
-            )
-        }?;
+        unsafe { CopySid(size, PSID(sid.as_mut_ptr() as *mut c_void), psid) }?;
 
         unsafe { LocalFree(Some(HLOCAL(psid.0))) };
 
-        assert!( size as usize <= sid.capacity() );
+        assert!(size as usize <= sid.capacity());
         unsafe { sid.set_len(size as usize) };
 
-        Ok(Self {
-            sid,
-        })
+        Ok(Self { sid })
     }
 
     pub fn from_str(string_sid: &str) -> Result<Self> {
@@ -606,19 +547,19 @@ impl SID {
 
     //
 
-    pub fn as_ref( &self ) -> &SIDRef {
-        SIDRef::from_slice( self.sid.as_slice() )
+    pub fn as_ref(&self) -> &SIDRef {
+        SIDRef::from_slice(self.sid.as_slice())
     }
 
-    pub fn into_vsid( self ) -> VSID<'static> {
+    pub fn into_vsid(self) -> VSID<'static> {
         VSID::Value(self)
     }
 
-    pub fn as_vsid( &self ) -> VSID<'_> {
+    pub fn as_vsid(&self) -> VSID<'_> {
         self.as_ref().as_vsid()
     }
 
-    pub fn to_owned_vsid( &self ) -> VSID<'static> {
+    pub fn to_owned_vsid(&self) -> VSID<'static> {
         VSID::Value(self.clone())
     }
 
@@ -629,32 +570,32 @@ impl SID {
     ///
     /// # Errors
     /// On error, a Windows error code is returned with the `Err` type.
-    pub fn to_os_string( &self ) -> Result<OsString> {
+    pub fn to_os_string(&self) -> Result<OsString> {
         self.as_ref().to_os_string()
     }
 
-    pub fn to_string( &self ) -> Result<String> {
+    pub fn to_string(&self) -> Result<String> {
         self.as_ref().to_string()
     }
 
-    pub fn to_account_name_or_sid( &self ) -> Result<OsString> {
+    pub fn to_account_name_or_sid(&self) -> Result<OsString> {
         self.as_ref().to_account_name_or_sid()
     }
 
-    pub fn get_domain_of( &self ) -> Result<Self> {
+    pub fn get_domain_of(&self) -> Result<Self> {
         self.as_ref().get_domain_of()
     }
 
     //
 
     #[inline]
-    pub fn len( &self ) -> u32 {
+    pub fn len(&self) -> u32 {
         self.sid.len() as u32
     }
 
     //
 
-    pub fn eq_to_psid( &self, other: PSID ) -> bool {
+    pub fn eq_to_psid(&self, other: PSID) -> bool {
         if !other.is_invalid() || !unsafe { IsValidSid(other) }.as_bool() {
             return false;
         }
@@ -662,15 +603,15 @@ impl SID {
         unsafe { EqualSid(self.psid(), other) }.is_ok()
     }
 
-    pub fn eq_to_ref( &self, other: &SIDRef) -> bool {
+    pub fn eq_to_ref(&self, other: &SIDRef) -> bool {
         self.as_ref().eq(&other)
     }
 
-    pub fn eq( &self, other: &Self ) -> bool {
-        unsafe { EqualSid( self.psid(), other.psid() ) }.is_ok()
+    pub fn eq(&self, other: &Self) -> bool {
+        unsafe { EqualSid(self.psid(), other.psid()) }.is_ok()
     }
 
-    pub fn cmp_to_psid( &self, other: PSID ) -> Option<cmp::Ordering> {
+    pub fn cmp_to_psid(&self, other: PSID) -> Option<cmp::Ordering> {
         // Invalid, null or empty SIDs are always less then valid
 
         let Some(other_sidref) = SIDRef::from_psid(other).ok()? else {
@@ -682,7 +623,7 @@ impl SID {
         self_sidref.cmp(&other_sidref)
     }
 
-    pub fn cmp( &self, other: &Self ) -> Option<cmp::Ordering> {
+    pub fn cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         // Invalid, null or empty SIDs are always less then valid
 
         let self_sidref = self.as_ref();
@@ -694,7 +635,7 @@ impl SID {
     //
 
     #[inline(always)]
-    pub fn psid( &self ) -> PSID {
+    pub fn psid(&self) -> PSID {
         PSID(self.sid.as_ptr() as *mut c_void)
     }
 }
@@ -717,12 +658,8 @@ impl fmt::Debug for SID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("SID");
         let f = match self.to_os_string() {
-            Ok(s) => {
-                f.field(&s)
-            },
-            Err(_) => {
-                f.field(&self.sid)
-            }
+            Ok(s) => f.field(&s),
+            Err(_) => f.field(&self.sid),
         };
         f.finish()
     }
@@ -747,11 +684,11 @@ impl cmp::PartialOrd for SID {
 pub type VSID<'r> = MaybePtr<&'r SIDRef, SID>;
 
 impl<'r> VSID<'r> {
-    pub fn empty() -> VSID<'static>{
+    pub fn empty() -> VSID<'static> {
         MaybePtr::None
     }
 
-    pub unsafe fn from_psid( psid: PSID ) -> Result<Self> {
+    pub unsafe fn from_psid(psid: PSID) -> Result<Self> {
         let Some(sidref) = SIDRef::from_psid(psid)? else {
             return Ok(MaybePtr::None);
         };
@@ -759,9 +696,8 @@ impl<'r> VSID<'r> {
         Ok(MaybePtr::Ptr(sidref))
     }
 
-    pub unsafe fn from_psid_or_empty( psid: PSID ) -> Self {
-        unsafe { Self::from_psid(psid) }
-            .unwrap_or(Self::None)
+    pub unsafe fn from_psid_or_empty(psid: PSID) -> Self {
+        unsafe { Self::from_psid(psid) }.unwrap_or(Self::None)
     }
 
     pub fn from_os_str(string_sid: &OsStr) -> Result<VSID<'static>> {
@@ -774,215 +710,164 @@ impl<'r> VSID<'r> {
         Ok(MaybePtr::Value(sid))
     }
 
-    pub fn from_account_name(name: &OsStr, system: Option<&OsStr>) -> Result<(VSID<'static>, OsString)> {
+    pub fn from_account_name(
+        name: &OsStr,
+        system: Option<&OsStr>,
+    ) -> Result<(VSID<'static>, OsString)> {
         let (sid, domain_name) = SID::from_account_name(name, system)?;
         Ok((MaybePtr::Value(sid), domain_name))
     }
 
     pub fn to_os_string(&self) -> Result<OsString> {
         match self {
-            Self::None => {
-                Ok(OsString::new())
-            },
-            Self::Ptr(p) => {
-                p.to_os_string()
-            },
-            Self::Value(v) => {
-                v.to_os_string()
-            }
+            Self::None => Ok(OsString::new()),
+            Self::Ptr(p) => p.to_os_string(),
+            Self::Value(v) => v.to_os_string(),
         }
     }
 
     pub fn to_string(&self) -> Result<String> {
         match self {
-            Self::None => {
-                Ok(String::new())
-            },
-            Self::Ptr(p) => {
-                p.to_string()
-            },
-            Self::Value(v) => {
-                v.to_string()
-            }
+            Self::None => Ok(String::new()),
+            Self::Ptr(p) => p.to_string(),
+            Self::Value(v) => v.to_string(),
         }
     }
 
     pub fn to_account_name_or_sid(&self) -> Result<OsString> {
         match self {
-            Self::None => {
-                Ok(OsString::new())
-            },
-            Self::Ptr(p) => {
-                p.to_account_name_or_sid()
-            },
-            Self::Value(v) => {
-                v.to_account_name_or_sid()
-            }
+            Self::None => Ok(OsString::new()),
+            Self::Ptr(p) => p.to_account_name_or_sid(),
+            Self::Value(v) => v.to_account_name_or_sid(),
         }
     }
 
-    pub fn get_domain_of( &self ) -> Result<SID> {
+    pub fn get_domain_of(&self) -> Result<SID> {
         match self {
-            Self::None => {
-                Err(Error::empty())
-            },
-            Self::Ptr(p) => {
-                p.get_domain_of()
-            },
-            Self::Value(v) => {
-                v.get_domain_of()
-            }
+            Self::None => Err(Error::empty()),
+            Self::Ptr(p) => p.get_domain_of(),
+            Self::Value(v) => v.get_domain_of(),
         }
     }
 
     //
 
-    pub fn to_owned( &self ) -> Result<VSID<'static>> {
-        Ok(
-            match self {
-                MaybePtr::None => {
-                    MaybePtr::None
-                },
-                MaybePtr::Ptr(p) => {
-                    MaybePtr::Value(p.to_sid()?)
-                },
-                MaybePtr::Value(v) => {
-                    MaybePtr::Value(v.clone())
-                }
-            }
-        )
+    pub fn to_owned(&self) -> Result<VSID<'static>> {
+        Ok(match self {
+            MaybePtr::None => MaybePtr::None,
+            MaybePtr::Ptr(p) => MaybePtr::Value(p.to_sid()?),
+            MaybePtr::Value(v) => MaybePtr::Value(v.clone()),
+        })
     }
 
-    pub fn into_owned_inplace( &mut self ) -> Result<&mut VSID<'static>> {
+    pub fn into_owned_inplace(&mut self) -> Result<&mut VSID<'static>> {
         match self {
             MaybePtr::Ptr(p) => {
                 *self = MaybePtr::Value(p.to_sid()?);
-            },
-            MaybePtr::None | MaybePtr::Value(_) => {},
+            }
+            MaybePtr::None | MaybePtr::Value(_) => {}
         }
 
-        debug_assert!( matches!(self, MaybePtr::None | MaybePtr::Value(_)) );
+        debug_assert!(matches!(self, MaybePtr::None | MaybePtr::Value(_)));
 
         // No more referential data, only static types -- so converting to 'static is safe
-        let static_self = unsafe { core::mem::transmute::<&mut VSID<'r>, &mut VSID<'static>>(self) };
+        let static_self =
+            unsafe { core::mem::transmute::<&mut VSID<'r>, &mut VSID<'static>>(self) };
 
         Ok(static_self)
     }
 
-    pub fn as_ref( &self ) -> Option<&SIDRef> {
+    pub fn as_ref(&self) -> Option<&SIDRef> {
         match self {
-            Self::None => {
-                None
-            },
-            Self::Ptr(p) => {
-                Some(p.clone())
-            },
-            Self::Value(v) => {
-                Some(v.as_ref())
-            }
+            Self::None => None,
+            Self::Ptr(p) => Some(p),
+            Self::Value(v) => Some(v.as_ref()),
         }
     }
 
     //
 
-    pub fn len( &self ) -> u32 {
+    pub fn len(&self) -> u32 {
         match self {
-            Self::None => {
-                0
-            },
-            Self::Ptr(p) => {
-                p.len()
-            },
-            Self::Value(v) => {
-                v.len()
-            }
+            Self::None => 0,
+            Self::Ptr(p) => p.len(),
+            Self::Value(v) => v.len(),
         }
     }
 
-    pub fn is_valid( &self ) -> bool {
+    pub fn is_valid(&self) -> bool {
         match self {
-            Self::None => {
-                false
-            },
-            Self::Ptr(_) | Self::Value(_)=> {
-                true
-            },
+            Self::None => false,
+            Self::Ptr(_) | Self::Value(_) => true,
         }
     }
 
     //
 
-    pub fn eq_to_psid( &self, other: PSID) -> bool {
+    pub fn eq_to_psid(&self, other: PSID) -> bool {
         let other_ref = SIDRef::from_psid(other).ok().flatten();
-        
+
         match (self.as_ref(), other_ref) {
-            (None, None) => { true },
-            (None, Some(_)) => { false },
-            (Some(_), None) => { false },
-            (Some(s), Some(o)) => { s.eq(o) }
-        }        
+            (None, None) => true,
+            (None, Some(_)) => false,
+            (Some(_), None) => false,
+            (Some(s), Some(o)) => s.eq(o),
+        }
     }
 
-    pub fn eq_to_ref( &self, other: &SIDRef) -> bool {
+    pub fn eq_to_ref(&self, other: &SIDRef) -> bool {
         match self.as_ref() {
-            None => { false },
-            Some(s) => { s.eq(other) },
-        }        
+            None => false,
+            Some(s) => s.eq(other),
+        }
     }
 
-    pub fn eq<'rr>( &self, other: &VSID<'rr>) -> bool {
+    pub fn eq<'rr>(&self, other: &VSID<'rr>) -> bool {
         match (self.as_ref(), other.as_ref()) {
-            (None, None) => { true },
-            (None, Some(_)) => { false },
-            (Some(_), None) => { false },
-            (Some(s), Some(o)) => { s.eq(o) }
-        }        
+            (None, None) => true,
+            (None, Some(_)) => false,
+            (Some(_), None) => false,
+            (Some(s), Some(o)) => s.eq(o),
+        }
     }
 
-    pub fn cmp_to_psid( &self, other: PSID ) -> Option<cmp::Ordering> {
+    pub fn cmp_to_psid(&self, other: PSID) -> Option<cmp::Ordering> {
         // Invalid, null or empty SIDs are always less then valid
 
         let self_ref = self.as_ref();
         let other_ref = SIDRef::from_psid(other).ok().flatten();
-        
+
         match (self_ref, other_ref) {
-            (None, None) => { None },
-            (None, Some(_)) => { Some(cmp::Ordering::Less) },
-            (Some(_), None) => { Some(cmp::Ordering::Greater) },
-            (Some(s), Some(o)) => { s.cmp(&o) }
-        }        
+            (None, None) => None,
+            (None, Some(_)) => Some(cmp::Ordering::Less),
+            (Some(_), None) => Some(cmp::Ordering::Greater),
+            (Some(s), Some(o)) => s.cmp(&o),
+        }
     }
 
-    pub fn cmp( &self, other: &Self ) -> Option<cmp::Ordering> {
+    pub fn cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         // Invalid, null or empty SIDs are always less then valid
 
         let self_ref = self.as_ref();
         let other_ref = other.as_ref();
 
         match (self_ref, other_ref) {
-            (None, None) => { None },
-            (None, Some(_)) => { Some(cmp::Ordering::Less) },
-            (Some(_), None) => { Some(cmp::Ordering::Greater) },
-            (Some(s), Some(o)) => { s.cmp(&o) }
-        }        
+            (None, None) => None,
+            (None, Some(_)) => Some(cmp::Ordering::Less),
+            (Some(_), None) => Some(cmp::Ordering::Greater),
+            (Some(s), Some(o)) => s.cmp(&o),
+        }
     }
 
     //
 
     pub fn psid(&self) -> Option<PSID> {
         match self {
-            Self::None => {
-                None
-            },
-            Self::Ptr(p) => {
-                Some(p.psid())
-            },
-            Self::Value(v) => {
-                Some(v.psid())
-            }
+            Self::None => None,
+            Self::Ptr(p) => Some(p.psid()),
+            Self::Value(v) => Some(v.psid()),
         }
     }
-
 }
 
 // impl<'r> AsRef<SIDRef> for VSID<'r> {
@@ -1004,15 +889,9 @@ impl<'r> Clone for VSID<'r> {
 impl<'r> Debug for VSID<'r> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::None => {
-                f.debug_tuple("VSID(None)").finish()
-            },
-            Self::Ptr(p) => {
-                Debug::fmt(p, f)
-            },
-            Self::Value(v) => {
-                Debug::fmt(v, f)
-            },            
+            Self::None => f.debug_tuple("VSID(None)").finish(),
+            Self::Ptr(p) => Debug::fmt(p, f),
+            Self::Value(v) => Debug::fmt(v, f),
         }
     }
 }
@@ -1036,13 +915,13 @@ impl<'r> hash::Hash for VSID<'r> {
         match self {
             Self::None => {
                 // do nothing
-            },
+            }
             Self::Ptr(p) => {
                 hash::Hash::hash(p, state);
-            },
+            }
             Self::Value(v) => {
                 hash::Hash::hash(v, state);
-            },            
+            }
         }
     }
 }
@@ -1050,30 +929,29 @@ impl<'r> hash::Hash for VSID<'r> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub trait IntoVSID<'s> {
-    fn into_vsid( self ) -> VSID<'s>;
+    fn into_vsid(self) -> VSID<'s>;
 }
 
 impl<'s, 'r: 's> IntoVSID<'s> for &'r SIDRef {
-    fn into_vsid( self ) -> VSID<'s> {
+    fn into_vsid(self) -> VSID<'s> {
         self.as_vsid()
     }
 }
 
 impl<'s> IntoVSID<'s> for SID {
-    fn into_vsid( self ) -> VSID<'s> {
+    fn into_vsid(self) -> VSID<'s> {
         self.into_vsid()
     }
 }
 
 impl<'s> IntoVSID<'s> for VSID<'s> {
-    fn into_vsid( self ) -> VSID<'s> {
+    fn into_vsid(self) -> VSID<'s> {
         self
     }
 }
 
 impl<'s, 'r: 's> IntoVSID<'s> for &'r SID {
-    fn into_vsid( self ) -> VSID<'s> {
+    fn into_vsid(self) -> VSID<'s> {
         self.as_vsid()
     }
 }
-

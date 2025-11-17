@@ -3,48 +3,47 @@
 #![allow(non_snake_case)]
 
 use core::{
+    ffi::c_void,
+    fmt, mem,
     ops::Drop,
     ptr::{null, null_mut},
-    fmt,
-    ffi::c_void,
-    mem,
 };
 use std::{
+    ffi::{OsString},
     os::windows::io::RawHandle,
     path::{Path, PathBuf},
-    ffi::{OsStr, OsString},
 };
 use widestring::U16CString;
 use windows::{
-    core::{Result, Error, PWSTR, HRESULT, BOOL},
+    core::{Error, Result, BOOL, HRESULT},
     Win32::{
-        Foundation::{
-            ERROR_SUCCESS, HLOCAL, LocalFree, HANDLE,
-        },
+        Foundation::{LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL},
         Security::{
             Authorization::{
-                SE_OBJECT_TYPE, GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, 
-                SetSecurityInfo, INHERITED_FROMW, GetInheritanceSourceW, SE_FILE_OBJECT,
-                FreeInheritedFromArray, SE_KERNEL_OBJECT, SE_REGISTRY_WOW64_32KEY, SE_REGISTRY_KEY,
-                TRUSTEE_W, BuildTrusteeWithSidW, GetEffectiveRightsFromAclW,
+                BuildTrusteeWithSidW, FreeInheritedFromArray, GetEffectiveRightsFromAclW,
+                GetInheritanceSourceW, GetNamedSecurityInfoW, GetSecurityInfo,
+                SetNamedSecurityInfoW, SetSecurityInfo, INHERITED_FROMW, SE_FILE_OBJECT,
+                SE_KERNEL_OBJECT, SE_OBJECT_TYPE, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
+                TRUSTEE_W,
             },
-            DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-            OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-            PSID, SACL_SECURITY_INFORMATION, UNPROTECTED_DACL_SECURITY_INFORMATION, 
-            PROTECTED_SACL_SECURITY_INFORMATION, UNPROTECTED_SACL_SECURITY_INFORMATION,
-            ACL as _ACL, OBJECT_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorSacl,
-            GetSecurityDescriptorOwner, GetSecurityDescriptorGroup, GetSecurityDescriptorControl,
-            SE_DACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, SE_SACL_PROTECTED, GENERIC_MAPPING,
+            GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorGroup,
+            GetSecurityDescriptorOwner, GetSecurityDescriptorSacl, ACL as _ACL,
+            DACL_SECURITY_INFORMATION, GENERIC_MAPPING, GROUP_SECURITY_INFORMATION,
+            LABEL_SECURITY_INFORMATION, OBJECT_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+            PROTECTED_DACL_SECURITY_INFORMATION, PROTECTED_SACL_SECURITY_INFORMATION,
+            PSECURITY_DESCRIPTOR, PSID, SACL_SECURITY_INFORMATION, SECURITY_DESCRIPTOR_CONTROL,
+            SE_DACL_PROTECTED, SE_SACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+            UNPROTECTED_SACL_SECURITY_INFORMATION,
         },
     },
 };
 
-use crate::{
-    acl_kind::ACLKind, utils::{DebugIdent, MaybeSet, pwstr_as_u16str, u16cstr_as_pcwstr, vec_as_pacl}
-};
 use super::{
-    privilege::Privilege,
-    sid::{SIDRef, SID}, 
+    sid::{SIDRef, SID},
+};
+use crate::{
+    acl_kind::ACLKind,
+    utils::{pwstr_as_u16str, u16cstr_as_pcwstr, vec_as_pacl, DebugIdent, MaybeSet},
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -66,7 +65,7 @@ impl SecurityDescriptorSource {
     pub fn from_handle(handle: HANDLE, object_type: SE_OBJECT_TYPE) -> Self {
         Self {
             kind: SecurityDescriptorSourceKind::Handle(handle),
-            object_type
+            object_type,
         }
     }
 
@@ -87,7 +86,11 @@ impl SecurityDescriptorSource {
 
     #[inline]
     pub fn from_registry_handle(handle: HANDLE, is_wow6432key: bool) -> Self {
-        let object_type = if is_wow6432key { SE_REGISTRY_WOW64_32KEY } else { SE_REGISTRY_KEY };
+        let object_type = if is_wow6432key {
+            SE_REGISTRY_WOW64_32KEY
+        } else {
+            SE_REGISTRY_KEY
+        };
         Self::from_handle(handle, object_type)
     }
 
@@ -95,7 +98,7 @@ impl SecurityDescriptorSource {
     pub fn from_path(path: &Path, object_type: SE_OBJECT_TYPE) -> Self {
         Self {
             kind: SecurityDescriptorSourceKind::Path(path.to_path_buf()),
-            object_type
+            object_type,
         }
     }
 
@@ -111,9 +114,13 @@ impl SecurityDescriptorSource {
 
     #[inline]
     pub fn from_registry_path(path: &Path, is_wow6432key: bool) -> Self {
-        let object_type = if is_wow6432key { SE_REGISTRY_WOW64_32KEY } else { SE_REGISTRY_KEY };
+        let object_type = if is_wow6432key {
+            SE_REGISTRY_WOW64_32KEY
+        } else {
+            SE_REGISTRY_KEY
+        };
         Self::from_path(path, object_type)
-    }    
+    }
 
     #[inline]
     pub fn object_type(&self) -> SE_OBJECT_TYPE {
@@ -150,9 +157,9 @@ impl WindowsSecurityDescriptor {
         }
     }
 
-    fn free_descriptor( &mut self ) {
+    fn free_descriptor(&mut self) {
         if !self.pSecurityDescriptor.0.is_null() {
-            unsafe { LocalFree(Some(HLOCAL(self.pSecurityDescriptor.0 as *mut c_void) )) };
+            unsafe { LocalFree(Some(HLOCAL(self.pSecurityDescriptor.0 as *mut c_void))) };
         }
 
         self.pSecurityDescriptor = PSECURITY_DESCRIPTOR(null_mut());
@@ -182,18 +189,18 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn read(
-        &mut self,
-        source: &SecurityDescriptorSource,
-        include_sacl: bool,
-    ) -> Result<()> {
+    pub fn read(&mut self, source: &SecurityDescriptorSource, include_sacl: bool) -> Result<()> {
         self.free_descriptor();
 
-        let mut flags =
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION;
+        let mut flags = DACL_SECURITY_INFORMATION
+            | PROTECTED_DACL_SECURITY_INFORMATION
+            | GROUP_SECURITY_INFORMATION
+            | OWNER_SECURITY_INFORMATION;
 
         if include_sacl {
-            flags |= SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+            flags |= SACL_SECURITY_INFORMATION
+                | PROTECTED_SACL_SECURITY_INFORMATION
+                | LABEL_SECURITY_INFORMATION;
         };
 
         let mut pDacl: *mut _ACL = null_mut();
@@ -202,7 +209,10 @@ impl WindowsSecurityDescriptor {
         let mut pGroup = PSID(null_mut());
 
         let ret = match source {
-            SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Handle(handle) } => unsafe {
+            SecurityDescriptorSource {
+                object_type,
+                kind: SecurityDescriptorSourceKind::Handle(handle),
+            } => unsafe {
                 GetSecurityInfo(
                     *handle,
                     *object_type,
@@ -214,7 +224,10 @@ impl WindowsSecurityDescriptor {
                     Some(&mut self.pSecurityDescriptor),
                 )
             },
-            SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } => {
+            SecurityDescriptorSource {
+                object_type,
+                kind: SecurityDescriptorSourceKind::Path(path),
+            } => {
                 let path = U16CString::from_os_str_truncate(path.as_os_str());
                 let path = u16cstr_as_pcwstr(&path);
 
@@ -237,7 +250,7 @@ impl WindowsSecurityDescriptor {
             let err = Error::from_hresult(HRESULT::from_win32(ret.0));
             return Err(err);
         }
-        
+
         self.dacl = MaybeSet::NotSet(pDacl);
         if include_sacl {
             self.sacl = MaybeSet::NotSet(pSacl);
@@ -267,11 +280,7 @@ impl WindowsSecurityDescriptor {
     ///
     /// # Errors
     /// On error, `false` is returned.
-    pub fn write(
-        &mut self,
-        source: &SecurityDescriptorSource,
-        include_sacl: bool,
-    ) -> Result<()> {
+    pub fn write(&mut self, source: &SecurityDescriptorSource, include_sacl: bool) -> Result<()> {
         let mut dacl = None;
         let mut sacl = None;
         let mut owner = None;
@@ -286,15 +295,17 @@ impl WindowsSecurityDescriptor {
             match dacl_value.as_ref() {
                 Some(dacl_value) => {
                     dacl = Some(vec_as_pacl(dacl_value));
-                },
-                None => {
-                    dacl = Some(null())
                 }
+                None => dacl = Some(null()),
             }
         }
 
         if let MaybeSet::Set(is_protected) = self.dacl_is_protected {
-            flags |= if is_protected { PROTECTED_DACL_SECURITY_INFORMATION } else { UNPROTECTED_DACL_SECURITY_INFORMATION };
+            flags |= if is_protected {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            };
         }
 
         //
@@ -305,15 +316,17 @@ impl WindowsSecurityDescriptor {
                 match sacl_value.as_ref() {
                     Some(sacl_value) => {
                         sacl = Some(vec_as_pacl(sacl_value));
-                    },
-                    None => {
-                        sacl = Some(null())
                     }
+                    None => sacl = Some(null()),
                 }
             }
 
             if let MaybeSet::Set(is_protected) = self.sacl_is_protected {
-                flags |= if is_protected { PROTECTED_SACL_SECURITY_INFORMATION } else { UNPROTECTED_SACL_SECURITY_INFORMATION };
+                flags |= if is_protected {
+                    PROTECTED_SACL_SECURITY_INFORMATION
+                } else {
+                    UNPROTECTED_SACL_SECURITY_INFORMATION
+                };
             }
         }
 
@@ -334,31 +347,19 @@ impl WindowsSecurityDescriptor {
         //
 
         let ret = match source {
-            SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Handle(handle) } => unsafe {
-                SetSecurityInfo(
-                    *handle,
-                    *object_type,
-                    flags,
-                    owner,
-                    group,
-                    dacl,
-                    sacl,
-                )
-            },
-            SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } => {
+            SecurityDescriptorSource {
+                object_type,
+                kind: SecurityDescriptorSourceKind::Handle(handle),
+            } => unsafe { SetSecurityInfo(*handle, *object_type, flags, owner, group, dacl, sacl) },
+            SecurityDescriptorSource {
+                object_type,
+                kind: SecurityDescriptorSourceKind::Path(path),
+            } => {
                 let path = U16CString::from_os_str_truncate(path.as_os_str());
                 let path = u16cstr_as_pcwstr(&path);
 
                 unsafe {
-                    SetNamedSecurityInfoW(
-                        path,
-                        *object_type,
-                        flags,
-                        owner,
-                        group,
-                        dacl,
-                        sacl,
-                    )
+                    SetNamedSecurityInfoW(path, *object_type, flags, owner, group, dacl, sacl)
                 }
             }
         };
@@ -371,14 +372,14 @@ impl WindowsSecurityDescriptor {
         Ok(())
     }
 
-    pub fn take_ownership(
-        source: &SecurityDescriptorSource,
-        owner: &SIDRef,
-    ) -> Result<()> {
+    pub fn take_ownership(source: &SecurityDescriptorSource, owner: &SIDRef) -> Result<()> {
         let flags = OWNER_SECURITY_INFORMATION;
 
         let ret = match source {
-            SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Handle(handle) } => unsafe {
+            SecurityDescriptorSource {
+                object_type,
+                kind: SecurityDescriptorSourceKind::Handle(handle),
+            } => unsafe {
                 SetSecurityInfo(
                     *handle,
                     *object_type,
@@ -389,7 +390,10 @@ impl WindowsSecurityDescriptor {
                     None,
                 )
             },
-            SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } => {
+            SecurityDescriptorSource {
+                object_type,
+                kind: SecurityDescriptorSourceKind::Path(path),
+            } => {
                 let path = U16CString::from_os_str_truncate(path.as_os_str());
                 let path = u16cstr_as_pcwstr(&path);
 
@@ -415,12 +419,11 @@ impl WindowsSecurityDescriptor {
         Ok(())
     }
 
-
-    fn read_dacl_from_descriptor( &mut self ) -> Result<()> {
+    fn read_dacl_from_descriptor(&mut self) -> Result<()> {
         let mut dacl_present: BOOL = BOOL(0);
         let mut dacl_defaulted: BOOL = BOOL(0);
         let mut pdacl: *mut _ACL = null_mut();
-        
+
         unsafe {
             GetSecurityDescriptorDacl(
                 self.pSecurityDescriptor,
@@ -430,18 +433,20 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.dacl = MaybeSet::NotSet(
-            if dacl_present.as_bool() { pdacl as *const _ACL } else { null() }
-        );
+        self.dacl = MaybeSet::NotSet(if dacl_present.as_bool() {
+            pdacl as *const _ACL
+        } else {
+            null()
+        });
 
         Ok(())
     }
 
-    fn read_sacl_from_descriptor( &mut self ) -> Result<()> {
+    fn read_sacl_from_descriptor(&mut self) -> Result<()> {
         let mut sacl_present: BOOL = BOOL(0);
         let mut sacl_defaulted: BOOL = BOOL(0);
         let mut pdacl: *mut _ACL = null_mut();
-        
+
         unsafe {
             GetSecurityDescriptorSacl(
                 self.pSecurityDescriptor,
@@ -451,23 +456,21 @@ impl WindowsSecurityDescriptor {
             )
         }?;
 
-        self.sacl = MaybeSet::NotSet(
-            if sacl_present.as_bool() { pdacl as *const _ACL } else { null() }
-        );
+        self.sacl = MaybeSet::NotSet(if sacl_present.as_bool() {
+            pdacl as *const _ACL
+        } else {
+            null()
+        });
 
         Ok(())
     }
 
-    fn read_owner_from_descriptor( &mut self ) -> Result<()> {
+    fn read_owner_from_descriptor(&mut self) -> Result<()> {
         let mut psid: PSID = PSID(null_mut());
         let mut owner_defaulted: BOOL = BOOL(0);
-        
+
         unsafe {
-            GetSecurityDescriptorOwner(
-                self.pSecurityDescriptor,
-                &mut psid,
-                &mut owner_defaulted,
-            )
+            GetSecurityDescriptorOwner(self.pSecurityDescriptor, &mut psid, &mut owner_defaulted)
         }?;
 
         self.owner = MaybeSet::NotSet(psid);
@@ -475,16 +478,12 @@ impl WindowsSecurityDescriptor {
         Ok(())
     }
 
-    fn read_group_from_descriptor( &mut self ) -> Result<()> {
+    fn read_group_from_descriptor(&mut self) -> Result<()> {
         let mut psid: PSID = PSID(null_mut());
         let mut group_defaulted: BOOL = BOOL(0);
-        
+
         unsafe {
-            GetSecurityDescriptorGroup(
-                self.pSecurityDescriptor,
-                &mut psid,
-                &mut group_defaulted,
-            )
+            GetSecurityDescriptorGroup(self.pSecurityDescriptor, &mut psid, &mut group_defaulted)
         }?;
 
         self.group = MaybeSet::NotSet(psid);
@@ -492,48 +491,37 @@ impl WindowsSecurityDescriptor {
         Ok(())
     }
 
-    fn read_dacl_is_protected_from_descriptor( &mut self ) -> Result<()> {
+    fn read_dacl_is_protected_from_descriptor(&mut self) -> Result<()> {
         let mut control: u16 = 0;
         let mut revision: u32 = 0;
-        
+
         unsafe {
-            GetSecurityDescriptorControl(
-                self.pSecurityDescriptor,
-                &mut control,
-                &mut revision,
-            )
+            GetSecurityDescriptorControl(self.pSecurityDescriptor, &mut control, &mut revision)
         }?;
 
-        self.dacl_is_protected = MaybeSet::NotSet(
-            SECURITY_DESCRIPTOR_CONTROL(control).contains(SE_DACL_PROTECTED)
-        );
+        self.dacl_is_protected =
+            MaybeSet::NotSet(SECURITY_DESCRIPTOR_CONTROL(control).contains(SE_DACL_PROTECTED));
 
         Ok(())
     }
 
-    fn read_sacl_is_protected_from_descriptor( &mut self ) -> Result<()> {
+    fn read_sacl_is_protected_from_descriptor(&mut self) -> Result<()> {
         let mut control: u16 = 0;
         let mut revision: u32 = 0;
-        
+
         unsafe {
-            GetSecurityDescriptorControl(
-                self.pSecurityDescriptor,
-                &mut control,
-                &mut revision,
-            )
+            GetSecurityDescriptorControl(self.pSecurityDescriptor, &mut control, &mut revision)
         }?;
 
-        self.sacl_is_protected = MaybeSet::NotSet(
-            SECURITY_DESCRIPTOR_CONTROL(control).contains(SE_SACL_PROTECTED)
-        );
+        self.sacl_is_protected =
+            MaybeSet::NotSet(SECURITY_DESCRIPTOR_CONTROL(control).contains(SE_SACL_PROTECTED));
 
         Ok(())
     }
-
 
     //
 
-    pub fn dacl( &self ) -> Option<*const _ACL> {
+    pub fn dacl(&self) -> Option<*const _ACL> {
         match &self.dacl {
             MaybeSet::NotSet(p) => {
                 if (*p).is_null() {
@@ -541,13 +529,9 @@ impl WindowsSecurityDescriptor {
                 } else {
                     Some(*p)
                 }
-            },
-            MaybeSet::Set(None) => {
-                None
-            },
-            MaybeSet::Set(Some(v)) => {
-                Some(vec_as_pacl(v))
             }
+            MaybeSet::Set(None) => None,
+            MaybeSet::Set(Some(v)) => Some(vec_as_pacl(v)),
         }
     }
 
@@ -567,29 +551,25 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn dacl_is_protected( &self ) -> bool {
+    pub fn dacl_is_protected(&self) -> bool {
         match &self.dacl_is_protected {
-            MaybeSet::NotSet(p) => {
-                *p
-            },
-            MaybeSet::Set(v) => {
-                *v
-            },
+            MaybeSet::NotSet(p) => *p,
+            MaybeSet::Set(v) => *v,
         }
     }
 
-    pub fn set_dacl_is_protected( &mut self, is_protected: bool ) -> Result<()> {
+    pub fn set_dacl_is_protected(&mut self, is_protected: bool) -> Result<()> {
         self.dacl_is_protected = MaybeSet::Set(is_protected);
         Ok(())
     }
 
-    pub fn unset_dacl_is_protected( &mut self ) -> Result<()> {
+    pub fn unset_dacl_is_protected(&mut self) -> Result<()> {
         self.read_dacl_is_protected_from_descriptor()
     }
 
     //
 
-    pub fn sacl( &self ) -> Option<*const _ACL> {
+    pub fn sacl(&self) -> Option<*const _ACL> {
         match &self.sacl {
             MaybeSet::NotSet(p) => {
                 if (*p).is_null() {
@@ -597,13 +577,9 @@ impl WindowsSecurityDescriptor {
                 } else {
                     Some(*p)
                 }
-            },
-            MaybeSet::Set(None) => {
-                None
-            },
-            MaybeSet::Set(Some(v)) => {
-                Some(vec_as_pacl(v))
             }
+            MaybeSet::Set(None) => None,
+            MaybeSet::Set(Some(v)) => Some(vec_as_pacl(v)),
         }
     }
 
@@ -623,42 +599,35 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn sacl_is_protected( &self ) -> bool {
+    pub fn sacl_is_protected(&self) -> bool {
         match &self.sacl_is_protected {
-            MaybeSet::NotSet(p) => {
-                *p
-            },
-            MaybeSet::Set(v) => {
-                *v
-            },
+            MaybeSet::NotSet(p) => *p,
+            MaybeSet::Set(v) => *v,
         }
     }
 
-    pub fn set_sacl_is_protected( &mut self, is_protected: bool ) -> Result<()> {
+    pub fn set_sacl_is_protected(&mut self, is_protected: bool) -> Result<()> {
         self.sacl_is_protected = MaybeSet::Set(is_protected);
         Ok(())
     }
 
-    pub fn unset_sacl_is_protected( &mut self ) -> Result<()> {
+    pub fn unset_sacl_is_protected(&mut self) -> Result<()> {
         self.read_sacl_is_protected_from_descriptor()
     }
 
     //
 
-    pub fn sacl_is_modified( &self ) -> bool {
-        matches!( &self.sacl, MaybeSet::Set(_) ) || matches!( &self.sacl_is_protected, MaybeSet::Set(_) )
+    pub fn sacl_is_modified(&self) -> bool {
+        matches!(&self.sacl, MaybeSet::Set(_))
+            || matches!(&self.sacl_is_protected, MaybeSet::Set(_))
     }
 
     //
 
-    pub fn owner( &self ) -> Result<Option<&SIDRef>> {
+    pub fn owner(&self) -> Result<Option<&SIDRef>> {
         match &self.owner {
-            MaybeSet::NotSet(ppsid) => {
-                Ok(SIDRef::from_psid(*ppsid)?)
-            },
-            MaybeSet::Set(sid) => {
-                Ok(Some(sid.as_ref()))
-            }
+            MaybeSet::NotSet(ppsid) => Ok(SIDRef::from_psid(*ppsid)?),
+            MaybeSet::Set(sid) => Ok(Some(sid.as_ref())),
         }
     }
 
@@ -673,14 +642,10 @@ impl WindowsSecurityDescriptor {
 
     //
 
-    pub fn group( &self ) -> Result<Option<&SIDRef>> {
+    pub fn group(&self) -> Result<Option<&SIDRef>> {
         match &self.group {
-            MaybeSet::NotSet(ppsid) => {
-                Ok(SIDRef::from_psid(*ppsid)?)
-            },
-            MaybeSet::Set(sid) => {
-                Ok(Some(sid.as_ref()))
-            }
+            MaybeSet::NotSet(ppsid) => Ok(SIDRef::from_psid(*ppsid)?),
+            MaybeSet::Set(sid) => Ok(Some(sid.as_ref())),
         }
     }
 
@@ -693,15 +658,19 @@ impl WindowsSecurityDescriptor {
         self.read_group_from_descriptor()
     }
 
-    pub fn get_inheritance_source<K: ACLKind>( 
-        &self, 
+    pub fn get_inheritance_source<K: ACLKind>(
+        &self,
         source: &SecurityDescriptorSource,
         pacl: *const _ACL,
     ) -> Result<WindowsInheritedFrom> {
         if pacl.is_null() {
             return Err(Error::empty());
         }
-        let SecurityDescriptorSource { object_type, kind: SecurityDescriptorSourceKind::Path(path) } = source else {
+        let SecurityDescriptorSource {
+            object_type,
+            kind: SecurityDescriptorSourceKind::Path(path),
+        } = source
+        else {
             return Err(Error::empty());
         };
 
@@ -726,14 +695,14 @@ impl WindowsSecurityDescriptor {
         let ret = unsafe {
             GetInheritanceSourceW(
                 path,
-                *object_type, 
+                *object_type,
                 K::get_security_information_bit(),
                 is_container,
                 None,
                 pacl,
-                None, 
+                None,
                 &generic_mapping,
-                pInheritArray
+                pInheritArray,
             )
         };
 
@@ -742,32 +711,20 @@ impl WindowsSecurityDescriptor {
             return Err(err);
         }
 
-        Ok(WindowsInheritedFrom {
-            ace_count,
-            buffer,
-        })
+        Ok(WindowsInheritedFrom { ace_count, buffer })
     }
 
     //
 
-    pub fn get_effective_access_rights( &self, sid: &SIDRef ) -> Result<u32> {
+    pub fn get_effective_access_rights(&self, sid: &SIDRef) -> Result<u32> {
         let mut trustee = unsafe { mem::zeroed::<TRUSTEE_W>() };
 
-        unsafe {
-            BuildTrusteeWithSidW( 
-                &mut trustee, 
-                Some(sid.psid())
-            )
-        }
+        unsafe { BuildTrusteeWithSidW(&mut trustee, Some(sid.psid())) }
 
         let mut access_mask: u32 = 0;
 
         let ret = unsafe {
-            GetEffectiveRightsFromAclW( 
-                self.dacl().unwrap_or(null()), 
-                &trustee, 
-                &mut access_mask
-            )
+            GetEffectiveRightsFromAclW(self.dacl().unwrap_or(null()), &trustee, &mut access_mask)
         };
 
         if ret != ERROR_SUCCESS {
@@ -793,48 +750,44 @@ pub struct WindowsInheritedFrom {
 }
 
 impl WindowsInheritedFrom {
-    pub fn count( &self ) -> u16 {
+    pub fn count(&self) -> u16 {
         self.ace_count
     }
 
-    pub fn get( &self, idx: u16 ) -> Option<&INHERITED_FROMW> {
+    pub fn get(&self, idx: u16) -> Option<&INHERITED_FROMW> {
         if idx >= self.ace_count {
             return None;
         }
 
         let pInheritArray = self.buffer.as_ptr() as *const INHERITED_FROMW;
-        let pItem = unsafe { &* pInheritArray.offset(idx as isize) };
+        let pItem = unsafe { &*pInheritArray.offset(idx as isize) };
         Some(pItem)
     }
 
-    pub fn generation_gap( item: &INHERITED_FROMW ) -> i32 {
+    pub fn generation_gap(item: &INHERITED_FROMW) -> i32 {
         item.GenerationGap
     }
 
-    pub fn ancestor_name( item: &INHERITED_FROMW ) -> Result<Option<OsString>> {
+    pub fn ancestor_name(item: &INHERITED_FROMW) -> Result<Option<OsString>> {
         if item.AncestorName.is_null() {
-            return Ok(None)
+            return Ok(None);
         }
-        
-        let name = unsafe { &* pwstr_as_u16str(item.AncestorName) }.to_os_string();
+
+        let name = unsafe { &*pwstr_as_u16str(item.AncestorName) }.to_os_string();
 
         Ok(Some(name))
     }
 
-    pub fn free( &mut self ) -> Result<()> {
+    pub fn free(&mut self) -> Result<()> {
         if self.buffer.is_empty() && self.ace_count == 0 {
             return Ok(());
         }
 
         let pInheritArray = self.buffer.as_ptr() as *const INHERITED_FROMW;
-        let pInheritArray = unsafe { core::slice::from_raw_parts( pInheritArray, self.ace_count as usize ) };
-        
-        let ret = unsafe {
-            FreeInheritedFromArray(
-                pInheritArray,
-                None
-            )
-        };
+        let pInheritArray =
+            unsafe { core::slice::from_raw_parts(pInheritArray, self.ace_count as usize) };
+
+        let ret = unsafe { FreeInheritedFromArray(pInheritArray, None) };
 
         if ret != ERROR_SUCCESS {
             let err = Error::from_hresult(HRESULT::from_win32(ret.0));
@@ -860,15 +813,9 @@ impl fmt::Debug for MaybeSet<*const _ACL, Option<Vec<u8>>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("ACL");
         let f = match self {
-            MaybeSet::NotSet(p) => {
-                f.field(p)
-            },
-            MaybeSet::Set(None) => {
-                f.field(&DebugIdent("None"))
-            }
-            MaybeSet::Set(Some(v)) => {
-                f.field(v)
-            }
+            MaybeSet::NotSet(p) => f.field(p),
+            MaybeSet::Set(None) => f.field(&DebugIdent("None")),
+            MaybeSet::Set(Some(v)) => f.field(v),
         };
         f.finish()
     }
@@ -878,12 +825,8 @@ impl fmt::Debug for MaybeSet<PSID, SID> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_tuple("SID");
         let f = match self {
-            MaybeSet::NotSet(u) => {
-                f.field(u)
-            },
-            MaybeSet::Set(s) => {
-                f.field(s)
-            }
+            MaybeSet::NotSet(u) => f.field(u),
+            MaybeSet::Set(s) => f.field(s),
         };
         f.finish()
     }
@@ -892,13 +835,8 @@ impl fmt::Debug for MaybeSet<PSID, SID> {
 impl fmt::Debug for MaybeSet<bool, bool> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MaybeSet::NotSet(u) => {
-                fmt::Debug::fmt(u, f)
-            },
-            MaybeSet::Set(s) => {
-                fmt::Debug::fmt(s, f)
-            }
+            MaybeSet::NotSet(u) => fmt::Debug::fmt(u, f),
+            MaybeSet::Set(s) => fmt::Debug::fmt(s, f),
         }
     }
 }
-

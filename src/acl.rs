@@ -2,54 +2,48 @@
 
 #![allow(non_snake_case)]
 
-use core::{
-    ffi::c_void,
-    ptr::{null_mut},
-    marker::PhantomData,
-    cmp::min,
-};
-use std::{
-    ptr::null,
-    ffi::OsString,
-};
-use windows::{
-    core::{
-        Error, Result, HRESULT,
-    },
-    Win32::{
-        Foundation::{
-            STATUS_ALLOTTED_SPACE_EXCEEDED, 
-        },
-        Security::{
-            Authorization::INHERITED_FROMW,
-            GetAce, InitializeAcl, IsValidAcl,
-            ACL as _ACL, ACL_REVISION_DS, ACE_HEADER, ACE_FLAGS,
-            FindFirstFreeAce, 
-        },
-    },
-};
+use core::{cmp::min, ffi::c_void, marker::PhantomData, ptr::null_mut};
 use fallible_iterator::FallibleIterator;
+use std::{ffi::OsString, ptr::null};
+use windows::{
+    core::{Error, Result, HRESULT},
+    Win32::{
+        Foundation::STATUS_ALLOTTED_SPACE_EXCEEDED,
+        Security::{
+            FindFirstFreeAce, GetAce, InitializeAcl, IsValidAcl,
+            ACE_HEADER, ACL as _ACL, ACL_REVISION_DS,
+        },
+    },
+};
 
 use crate::{
-    ace::{ACE, ACEFilter, AVERAGE_ACE_SIZE, IntoOptionalACEFilter, MAX_ACL_SIZE}, acl_kind::{ACLKind, DACL, IsACLKind, SACL}, types::*, utils::{as_ppvoid_mut, vec_as_pacl_mut}, winapi::{
-        security_descriptor::{WindowsInheritedFrom, WindowsSecurityDescriptor},
-        sid::{IntoVSID, SIDRef}, 
-    }
+    ace::{ACEFilter, IntoOptionalACEFilter, ACE, AVERAGE_ACE_SIZE, MAX_ACL_SIZE},
+    acl_kind::{ACLKind, IsACLKind, DACL, SACL},
+    types::*,
+    utils::{as_ppvoid_mut, vec_as_pacl_mut},
+    winapi::{
+        security_descriptor::{WindowsInheritedFrom},
+        sid::{IntoVSID, SIDRef},
+    },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub trait MaxCountPredictor {
-    fn predict_max_count( &self ) -> Result<u16>;
+    fn predict_max_count(&self) -> Result<u16>;
 }
 
 pub trait FromACLEntryIterator<'r, I: ACLEntryIterator<'r, K>, K: ACLKind>: Sized {
     fn from_iter(iter: I) -> Result<Self>;
 }
- 
-pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, Error = Error> + MaxCountPredictor {
-    
-    fn try_collect<T: FromACLEntryIterator<'r, Self, K>>( self ) -> Result<T> where Self: Sized {
+
+pub trait ACLEntryIterator<'r, K: ACLKind>:
+    FallibleIterator<Item = ACE<'r, K>, Error = Error> + MaxCountPredictor
+{
+    fn try_collect<T: FromACLEntryIterator<'r, Self, K>>(self) -> Result<T>
+    where
+        Self: Sized,
+    {
         T::from_iter(self)
     }
 
@@ -68,43 +62,86 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type. If the error code is 0, the provided `entry_type` is invalid.    
     #[inline]
-    fn add( self, entry: ACE<'r, K>, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
-        ACLListEntryAdder::new(
-            self, 
-            entry, 
-            filter.into_optional_mask()
+    fn add(
+        self,
+        entry: ACE<'r, K>,
+        filter: impl IntoOptionalACEFilter,
+    ) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+    {
+        ACLListEntryAdder::new(self, entry, filter.into_optional_mask())
+    }
+
+    #[inline]
+    fn add_allow<'s: 'r>(
+        self,
+        sid: impl IntoVSID<'s>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+        filter: impl IntoOptionalACEFilter,
+    ) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+        K: IsACLKind<DACL>,
+    {
+        self.add(
+            ACE::new_allow(sid, flags, access_mask),
+            filter.into_optional_mask(),
         )
     }
 
     #[inline]
-    fn add_allow<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
+    fn add_deny<'s: 'r>(
+        self,
+        sid: impl IntoVSID<'s>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+        filter: impl IntoOptionalACEFilter,
+    ) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+        K: IsACLKind<DACL>,
+    {
         self.add(
-            ACE::new_allow( sid, flags, access_mask ), 
-            filter.into_optional_mask()
+            ACE::new_deny(sid, flags, access_mask),
+            filter.into_optional_mask(),
         )
     }
 
     #[inline]
-    fn add_deny<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<DACL> {
+    fn add_audit<'s: 'r>(
+        self,
+        sid: impl IntoVSID<'s>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+        filter: impl IntoOptionalACEFilter,
+    ) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+        K: IsACLKind<SACL>,
+    {
         self.add(
-            ACE::new_deny( sid, flags, access_mask ), 
-            filter.into_optional_mask()
+            ACE::new_audit(sid, flags, access_mask),
+            filter.into_optional_mask(),
         )
     }
 
     #[inline]
-    fn add_audit<'s: 'r>( self, sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
+    fn add_mandatory_label<'s: 'r>(
+        self,
+        label_sid: impl IntoVSID<'s>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+        filter: impl IntoOptionalACEFilter,
+    ) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+        K: IsACLKind<SACL>,
+    {
         self.add(
-            ACE::new_audit( sid, flags, access_mask ), 
-            filter.into_optional_mask()
-        )
-    }
-
-    #[inline]
-    fn add_mandatory_label<'s: 'r>( self, label_sid: impl IntoVSID<'s>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized, K: IsACLKind<SACL> {
-        self.add(
-            ACE::new_mandatory_label( label_sid, flags, access_mask ), 
-            filter.into_optional_mask()
+            ACE::new_mandatory_label(label_sid, flags, access_mask),
+            filter.into_optional_mask(),
         )
     }
 
@@ -120,21 +157,23 @@ pub trait ACLEntryIterator<'r, K: ACLKind>: FallibleIterator<Item = ACE<'r, K>, 
     ///
     /// # Errors
     /// On error, a Windows error code wrapped in a `Err` type.
-    fn remove( self, sid: &SIDRef, filter: impl IntoOptionalACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
-        ACLListEntryRemover::new(
-            self, 
-            sid,
-            filter.into_optional_mask()
-        )
+    fn remove(
+        self,
+        sid: &SIDRef,
+        filter: impl IntoOptionalACEFilter,
+    ) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+    {
+        ACLListEntryRemover::new(self, sid, filter.into_optional_mask())
     }
 
-    fn remove_any_sid<'s>( self, filter: ACEFilter ) -> Result<impl ACLEntryIterator<'r, K>> where Self: Sized {
-        ACLListEntryRemover::new_any_sid(
-            self, 
-            filter
-        )
+    fn remove_any_sid<'s>(self, filter: ACEFilter) -> Result<impl ACLEntryIterator<'r, K>>
+    where
+        Self: Sized,
+    {
+        ACLListEntryRemover::new_any_sid(self, filter)
     }
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -145,10 +184,10 @@ pub struct ACL<'r, K: ACLKind> {
     _ph_r: PhantomData<&'r ()>,
     _ph_k: PhantomData<K>,
 }
- 
+
 impl<'r, K: ACLKind> ACL<'r, K> {
     /// Warning: pacl may be NULL
-    pub unsafe fn from_pacl( pacl: *const _ACL ) -> ACL<'static, K> {
+    pub unsafe fn from_pacl(pacl: *const _ACL) -> ACL<'static, K> {
         ACL {
             pacl,
             _ph_r: PhantomData,
@@ -173,7 +212,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     //     }
     // }
 
-    pub fn ace_count( self ) -> u16 {
+    pub fn ace_count(self) -> u16 {
         if !self.pacl.is_null() {
             unsafe { (*self.pacl).AceCount }
         } else {
@@ -186,22 +225,21 @@ impl<'r, K: ACLKind> ACL<'r, K> {
         self.pacl
     }
 
-    pub fn iter_hdr( self ) -> AceHdrIterator<'r> {
+    pub fn iter_hdr(self) -> AceHdrIterator<'r> {
         AceHdrIterator::new(self.pacl)
     }
 
-    pub fn iter_entry_hdr( self ) -> AceEntryHdrIterator<'r, K> {
+    pub fn iter_entry_hdr(self) -> AceEntryHdrIterator<'r, K> {
         AceEntryHdrIterator::new(self.pacl)
     }
 
-    pub fn iter( self ) -> AceEntryIterator<'r, K> {
+    pub fn iter(self) -> AceEntryIterator<'r, K> {
         AceEntryIterator::new(self.pacl)
     }
 
     /// Returns a `Vec<ACLEntry>` of access control list entries for the specified named object path.
     pub fn all(self) -> Result<Vec<ACE<'r, K>>> {
-        self.iter()
-            .try_collect()
+        self.iter().try_collect()
     }
 
     /// Retrieves a list of access control entries matching the target SID entity and optionally, a access control entry type.
@@ -212,7 +250,11 @@ impl<'r, K: ACLKind> ACL<'r, K> {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn all_filtered(self, sid: &SIDRef, mask: impl IntoOptionalACEFilter ) -> Result<Vec<ACE<'r, K>>> {
+    pub fn all_filtered(
+        self,
+        sid: &SIDRef,
+        mask: impl IntoOptionalACEFilter,
+    ) -> Result<Vec<ACE<'r, K>>> {
         let mask = mask.into_optional_mask();
 
         self.iter()
@@ -231,7 +273,7 @@ impl<'r, K: ACLKind> ACL<'r, K> {
             })
             .collect()
     }
-} 
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -248,15 +290,15 @@ impl<K: ACLKind> ACLVecList<K> {
         }
     }
 
-    pub fn as_vec( &self ) -> &Vec<u8> {
+    pub fn as_vec(&self) -> &Vec<u8> {
         &self.inner
     }
 
-    pub fn into_vec( self ) -> Vec<u8> {
+    pub fn into_vec(self) -> Vec<u8> {
         self.inner
     }
 
-    pub fn pacl( &self ) -> Result<*const _ACL> {
+    pub fn pacl(&self) -> Result<*const _ACL> {
         if self.inner.is_empty() {
             return Err(Error::empty());
         }
@@ -264,60 +306,56 @@ impl<K: ACLKind> ACLVecList<K> {
         Ok(self.inner.as_ptr() as *const _ACL)
     }
 
-    pub fn as_list<'s>( &'s self ) -> Result<ACL<'s, K>> {
+    pub fn as_list<'s>(&'s self) -> Result<ACL<'s, K>> {
         let pacl = self.pacl()?;
         let acl = unsafe { ACL::from_pacl(pacl) };
         Ok(acl)
     }
 
-    pub fn from_iter<'r, I>(mut iter: I) -> Result<Self> where I: ACLEntryIterator<'r, K> {
+    pub fn from_iter<'r, I>(mut iter: I) -> Result<Self>
+    where
+        I: ACLEntryIterator<'r, K>,
+    {
         let max_count = iter.predict_max_count()?;
-        let max_size = min( 
-            max_count.saturating_mul(AVERAGE_ACE_SIZE).saturating_add(size_of::<_ACL>() as u16), 
-            MAX_ACL_SIZE 
+        let max_size = min(
+            max_count
+                .saturating_mul(AVERAGE_ACE_SIZE)
+                .saturating_add(size_of::<_ACL>() as u16),
+            MAX_ACL_SIZE,
         );
 
-        let mut buffer = [0u8].repeat(max_size as usize );
+        let mut buffer = [0u8].repeat(max_size as usize);
 
         //
 
         let mut pacl = vec_as_pacl_mut(&mut buffer);
-        unsafe {
-            InitializeAcl(
-                pacl,
-                max_size as u32,
-                ACL_REVISION_DS,
-            )
-        }?;
+        unsafe { InitializeAcl(pacl, max_size as u32, ACL_REVISION_DS) }?;
 
         while let Some(entry) = iter.next()? {
-            match K::write_ace( pacl, &entry ) {
-                Ok(()) => {},
+            match K::write_ace(pacl, &entry) {
+                Ok(()) => {}
                 Err(err) if err.code() == HRESULT::from_nt(STATUS_ALLOTTED_SPACE_EXCEEDED.0) => {
                     let additional = MAX_ACL_SIZE.saturating_sub(buffer.len() as u16);
                     if additional == 0 {
                         return Err(err);
                     };
-                    buffer.try_reserve(additional as usize).map_err(|_| Error::empty())?;
+                    buffer
+                        .try_reserve(additional as usize)
+                        .map_err(|_| Error::empty())?;
 
                     pacl = vec_as_pacl_mut(&mut buffer);
-                    K::write_ace( pacl, &entry )?;
-                },
-                Err(err) => { 
+                    K::write_ace(pacl, &entry)?;
+                }
+                Err(err) => {
                     return Err(err);
-                },
+                }
             }
         }
 
         //
 
         let mut pfreeace: *mut c_void = null_mut();
-        unsafe {
-            FindFirstFreeAce(
-                pacl,
-                &mut pfreeace
-            )?
-        };
+        unsafe { FindFirstFreeAce(pacl, &mut pfreeace)? };
 
         let buffer_range = buffer[..].as_ptr_range();
 
@@ -330,16 +368,17 @@ impl<K: ACLKind> ACLVecList<K> {
             return Err(Error::empty());
         }
 
-        let acl_size =  unsafe { acl_end.offset_from_unsigned(acl_start) }
-            .try_into().map_err(|_| Error::empty())?;
+        let acl_size = unsafe { acl_end.offset_from_unsigned(acl_start) }
+            .try_into()
+            .map_err(|_| Error::empty())?;
 
-        debug_assert!( acl_size as usize <= buffer.capacity() );
+        debug_assert!(acl_size as usize <= buffer.capacity());
         unsafe { buffer.set_len(acl_size as usize) };
 
         //
 
         unsafe { (*pacl).AclSize = acl_size };
-        buffer.truncate( acl_size as usize );
+        buffer.truncate(acl_size as usize);
 
         if !unsafe { IsValidAcl(pacl) }.as_bool() {
             return Err(Error::empty());
@@ -352,8 +391,7 @@ impl<K: ACLKind> ACLVecList<K> {
             _ph: PhantomData,
         })
     }
-
-} 
+}
 
 impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FromACLEntryIterator<'r, I, K> for ACLVecList<K> {
     fn from_iter(iter: I) -> Result<Self> {
@@ -371,7 +409,7 @@ pub struct AceHdrIterator<'r> {
 }
 
 impl<'r> AceHdrIterator<'r> {
-    fn new( acl: *const _ACL ) -> Self {
+    fn new(acl: *const _ACL) -> Self {
         if acl.is_null() {
             return Self {
                 acl,
@@ -390,7 +428,7 @@ impl<'r> AceHdrIterator<'r> {
     }
 
     #[inline]
-    fn current_item_idx( &self ) -> Option<u16> {
+    fn current_item_idx(&self) -> Option<u16> {
         if self.idx > 0 {
             Some(self.idx - 1)
         } else {
@@ -403,40 +441,33 @@ impl<'r> FallibleIterator for AceHdrIterator<'r> {
     type Item = &'r ACE_HEADER;
     type Error = Error;
 
-    fn next( &mut self ) -> Result<Option<Self::Item>> {
+    fn next(&mut self) -> Result<Option<Self::Item>> {
         if self.idx >= self.ace_count {
             return Ok(None);
         }
 
-        debug_assert!( !self.acl.is_null() );
+        debug_assert!(!self.acl.is_null());
 
         let mut hdr: *mut ACE_HEADER = null_mut();
-        unsafe { 
-            GetAce(
-                self.acl,
-                self.idx as u32,
-                as_ppvoid_mut(&mut hdr)
-            )
-        }?;
+        unsafe { GetAce(self.acl, self.idx as u32, as_ppvoid_mut(&mut hdr)) }?;
 
         if hdr.is_null() {
             return Err(Error::empty());
         }
 
-        let hdr = unsafe { &* hdr };
+        let hdr = unsafe { &*hdr };
 
         self.idx += 1;
 
         Ok(Some(hdr))
     }
-} 
+}
 
 impl<'r> MaxCountPredictor for AceHdrIterator<'r> {
-    fn predict_max_count( &self ) -> Result<u16> {
+    fn predict_max_count(&self) -> Result<u16> {
         Ok(self.ace_count)
     }
 }
-   
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -446,7 +477,7 @@ pub struct AceEntryHdrIterator<'r, K: ACLKind> {
 }
 
 impl<'r, K: ACLKind> AceEntryHdrIterator<'r, K> {
-    fn new( acl: *const _ACL ) -> Self {
+    fn new(acl: *const _ACL) -> Self {
         Self {
             inner: AceHdrIterator::new(acl),
             _ph: PhantomData,
@@ -454,7 +485,7 @@ impl<'r, K: ACLKind> AceEntryHdrIterator<'r, K> {
     }
 
     #[inline]
-    fn current_item_idx( &self ) -> Option<u16> {
+    fn current_item_idx(&self) -> Option<u16> {
         self.inner.current_item_idx()
     }
 }
@@ -464,20 +495,18 @@ impl<'r, K: ACLKind> FallibleIterator for AceEntryHdrIterator<'r, K> {
     type Error = Error;
 
     fn next(&mut self) -> Result<Option<Self::Item>> {
-        Ok(
-            match self.inner.next()? {
-                Some(hdr) => {
-                    let entry = K::parse_ace(hdr)?;
-                    Some((entry, hdr))
-                },
-                None => None,
+        Ok(match self.inner.next()? {
+            Some(hdr) => {
+                let entry = K::parse_ace(hdr)?;
+                Some((entry, hdr))
             }
-        )
+            None => None,
+        })
     }
 }
 
 impl<'r, K: ACLKind> MaxCountPredictor for AceEntryHdrIterator<'r, K> {
-    fn predict_max_count( &self ) -> Result<u16> {
+    fn predict_max_count(&self) -> Result<u16> {
         self.inner.predict_max_count()
     }
 }
@@ -490,7 +519,7 @@ pub struct AceEntryIterator<'r, K: ACLKind> {
 }
 
 impl<'r, K: ACLKind> AceEntryIterator<'r, K> {
-    fn new( acl: *const _ACL ) -> Self {
+    fn new(acl: *const _ACL) -> Self {
         Self {
             inner: AceHdrIterator::new(acl),
             _ph: PhantomData,
@@ -498,7 +527,7 @@ impl<'r, K: ACLKind> AceEntryIterator<'r, K> {
     }
 
     #[inline]
-    fn current_item_idx( &self ) -> Option<u16> {
+    fn current_item_idx(&self) -> Option<u16> {
         self.inner.current_item_idx()
     }
 }
@@ -508,26 +537,23 @@ impl<'r, K: ACLKind> FallibleIterator for AceEntryIterator<'r, K> {
     type Error = Error;
 
     fn next(&mut self) -> Result<Option<Self::Item>> {
-        Ok(
-            match self.inner.next()? {
-                Some(hdr) => {
-                    let entry = K::parse_ace(hdr)?;
-                    Some(entry)
-                },
-                None => None,
+        Ok(match self.inner.next()? {
+            Some(hdr) => {
+                let entry = K::parse_ace(hdr)?;
+                Some(entry)
             }
-        )
+            None => None,
+        })
     }
 }
 
 impl<'r, K: ACLKind> MaxCountPredictor for AceEntryIterator<'r, K> {
-    fn predict_max_count( &self ) -> Result<u16> {
+    fn predict_max_count(&self) -> Result<u16> {
         self.inner.predict_max_count()
     }
 }
 
 impl<'r, K: ACLKind> ACLEntryIterator<'r, K> for AceEntryIterator<'r, K> {}
-
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -554,7 +580,7 @@ where
     K: ACLKind,
     F: FnMut(&ACE<'r, K>) -> Result<ACLListEntryReplaceResult<'r, K>>,
 {
-    pub fn new( inner: I, f: F ) -> Self {
+    pub fn new(inner: I, f: F) -> Self {
         Self {
             inner,
             f,
@@ -575,14 +601,14 @@ where
     fn next(&mut self) -> Result<Option<Self::Item>> {
         while let Some(item) = self.inner.next()? {
             match (self.f)(&item)? {
-                ACLListEntryReplaceResult::Ignore => { 
-                    return Ok(Some(item)); 
-                },
-                ACLListEntryReplaceResult::Remove => { 
-                    continue; 
-                },
+                ACLListEntryReplaceResult::Ignore => {
+                    return Ok(Some(item));
+                }
+                ACLListEntryReplaceResult::Remove => {
+                    continue;
+                }
                 ACLListEntryReplaceResult::Replace(item) => {
-                    return Ok(Some(item)); 
+                    return Ok(Some(item));
                 }
             };
         }
@@ -591,13 +617,13 @@ where
     }
 }
 
-impl<'r, I, K, F> MaxCountPredictor for ACLListEntryReplacer<'r, I, K, F> 
+impl<'r, I, K, F> MaxCountPredictor for ACLListEntryReplacer<'r, I, K, F>
 where
     I: ACLEntryIterator<'r, K>,
     K: ACLKind,
     F: FnMut(&ACE<'r, K>) -> Result<ACLListEntryReplaceResult<'r, K>>,
 {
-    fn predict_max_count( &self ) -> Result<u16> {
+    fn predict_max_count(&self) -> Result<u16> {
         self.inner.predict_max_count()
     }
 }
@@ -607,7 +633,8 @@ where
     I: ACLEntryIterator<'r, K>,
     K: ACLKind,
     F: FnMut(&ACE<'r, K>) -> Result<ACLListEntryReplaceResult<'r, K>>,
-{}
+{
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -618,7 +645,7 @@ pub struct ACLListEntryAdder<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> {
 }
 
 impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryAdder<'r, I, K> {
-    pub fn new( inner: I, entry: ACE<'r, K>, filter: Option<ACEFilter> ) -> Result<Self> {
+    pub fn new(inner: I, entry: ACE<'r, K>, filter: Option<ACEFilter>) -> Result<Self> {
         let _ = entry.sid.as_ref().ok_or_else(|| Error::empty())?;
         Ok(Self {
             inner,
@@ -635,9 +662,9 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator for ACLListEnt
     fn next(&mut self) -> Result<Option<Self::Item>> {
         if let Some(entry) = &self.entry {
             let sid = entry.sid.as_ref().unwrap();
-            
+
             while let Some(item) = self.inner.next()? {
-                if item.is_match( sid, &self.filter ) {
+                if item.is_match(sid, &self.filter) {
                     continue;
                 }
                 return Ok(Some(item));
@@ -655,13 +682,16 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator for ACLListEnt
 }
 
 impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> MaxCountPredictor for ACLListEntryAdder<'r, I, K> {
-    fn predict_max_count( &self ) -> Result<u16> {
+    fn predict_max_count(&self) -> Result<u16> {
         let inner_count = self.inner.predict_max_count()?;
         Ok(inner_count.saturating_add(1))
     }
 }
 
-impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLEntryIterator<'r, K> for ACLListEntryAdder<'r, I, K> {}
+impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLEntryIterator<'r, K>
+    for ACLListEntryAdder<'r, I, K>
+{
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -674,7 +704,7 @@ pub struct ACLListEntryRemover<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> {
 }
 
 impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryRemover<'r, 's, I, K> {
-    pub fn new( inner: I, sid: &'s SIDRef, filter: Option<ACEFilter> ) -> Result<Self> {
+    pub fn new(inner: I, sid: &'s SIDRef, filter: Option<ACEFilter>) -> Result<Self> {
         Ok(Self {
             inner,
             sid: Some(sid),
@@ -684,7 +714,7 @@ impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryRemover<'r, 's,
         })
     }
 
-    pub fn new_any_sid( inner: I, filter: ACEFilter ) -> Result<Self> {
+    pub fn new_any_sid(inner: I, filter: ACEFilter) -> Result<Self> {
         Ok(Self {
             inner,
             sid: None,
@@ -695,21 +725,23 @@ impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLListEntryRemover<'r, 's,
     }
 }
 
-impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator for ACLListEntryRemover<'r, 's, I, K> {
+impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator
+    for ACLListEntryRemover<'r, 's, I, K>
+{
     type Item = ACE<'r, K>;
     type Error = Error;
 
     fn next(&mut self) -> Result<Option<Self::Item>> {
         if let Some(sid) = self.sid {
             while let Some(item) = self.inner.next()? {
-                if item.is_match( sid, &self.filter ) {
+                if item.is_match(sid, &self.filter) {
                     continue;
                 }
                 return Ok(Some(item));
             }
         } else if let Some(filter) = &self.filter {
             while let Some(item) = self.inner.next()? {
-                if item.is_match_any_sid( filter ) {
+                if item.is_match_any_sid(filter) {
                     continue;
                 }
                 return Ok(Some(item));
@@ -724,24 +756,31 @@ impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> FallibleIterator for ACLLis
     }
 }
 
-impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> MaxCountPredictor for ACLListEntryRemover<'r, 's, I, K> {
-    fn predict_max_count( &self ) -> Result<u16> {
+impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> MaxCountPredictor
+    for ACLListEntryRemover<'r, 's, I, K>
+{
+    fn predict_max_count(&self) -> Result<u16> {
         self.inner.predict_max_count()
     }
 }
 
-impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLEntryIterator<'r, K> for ACLListEntryRemover<'r, 's, I, K> {}
+impl<'r, 's, I: ACLEntryIterator<'r, K>, K: ACLKind> ACLEntryIterator<'r, K>
+    for ACLListEntryRemover<'r, 's, I, K>
+{
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FromACLEntryIterator<'r, I, K> for Vec<ACE<'r, K>> {
+impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FromACLEntryIterator<'r, I, K>
+    for Vec<ACE<'r, K>>
+{
     fn from_iter(mut iter: I) -> Result<Self> {
         let mut result = vec![];
 
         while let Some(entry) = iter.next()? {
             result.push(entry);
         }
-        
+
         Ok(result)
     }
 }
@@ -750,7 +789,7 @@ impl<'r, I: ACLEntryIterator<'r, K>, K: ACLKind> FromACLEntryIterator<'r, I, K> 
 
 pub struct ACEWithInheritedFromIterator<'r, K: ACLKind> {
     inner: AceEntryIterator<'r, K>,
-    inherited_from: WindowsInheritedFrom,    
+    inherited_from: WindowsInheritedFrom,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -761,7 +800,7 @@ pub struct ACEWithInheritedFrom<'r, K: ACLKind> {
 }
 
 impl<'r, K: ACLKind> ACEWithInheritedFromIterator<'r, K> {
-    pub(crate) fn new( acl: *const _ACL, inherited_from: WindowsInheritedFrom ) -> Self {
+    pub(crate) fn new(acl: *const _ACL, inherited_from: WindowsInheritedFrom) -> Self {
         Self {
             inner: AceEntryIterator::new(acl),
             inherited_from,
@@ -775,7 +814,10 @@ impl<'r, K: ACLKind> FallibleIterator for ACEWithInheritedFromIterator<'r, K> {
 
     fn next(&mut self) -> Result<Option<Self::Item>> {
         while let Some(ace) = self.inner.next()? {
-            let idx = self.inner.current_item_idx().ok_or_else(|| Error::empty())?;
+            let idx = self
+                .inner
+                .current_item_idx()
+                .ok_or_else(|| Error::empty())?;
             let if_item = self.inherited_from.get(idx).ok_or_else(|| Error::empty())?;
 
             let item = ACEWithInheritedFrom {

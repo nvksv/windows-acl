@@ -2,30 +2,21 @@
 
 #![allow(non_snake_case)]
 
-use core::{
-    mem,
-    hash,
-    marker::PhantomData,
-    fmt,
-};
+use core::{fmt, hash, marker::PhantomData, mem};
 use std::ffi::OsString;
 use windows::{
-    core::{
-        Error, Result,
-    },
-    Win32::{
-        Security::{
-            PSID, ACE_FLAGS, CONTAINER_INHERIT_ACE, FAILED_ACCESS_ACE_FLAG, INHERIT_ONLY_ACE, INHERITED_ACE, 
-            NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE, SUCCESSFUL_ACCESS_ACE_FLAG,
-        },
+    core::{Error, Result},
+    Win32::Security::{
+        ACE_FLAGS, CONTAINER_INHERIT_ACE, FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, INHERIT_ONLY_ACE,
+        NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE, PSID, SUCCESSFUL_ACCESS_ACE_FLAG,
     },
 };
 
 use crate::{
-    utils::{acl_entry_size, DebugIdent, DebugUnpretty},
+    acl_kind::{ACLKind, IsACLKind, DACL, SACL},
     types::*,
-    winapi::sid::{SIDRef, VSID, IntoVSID},
-    acl_kind::{ACLKind, DACL, SACL, IsACLKind},
+    utils::{acl_entry_size, DebugUnpretty},
+    winapi::sid::{IntoVSID, SIDRef, VSID},
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -56,17 +47,34 @@ pub struct ACE<'r, K: ACLKind> {
 impl<'r, K: ACLKind> fmt::Debug for ACE<'r, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ACE")
-            .field( "entry_type", &self.entry_type )
-            .field( "sid", &self.sid )
-            .field( "flags", &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(self.flags, None)) )
-            .field( "access_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask, None)) )
+            .field("entry_type", &self.entry_type)
+            .field("sid", &self.sid)
+            .field(
+                "flags",
+                &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(
+                    self.flags, None,
+                )),
+            )
+            .field(
+                "access_mask",
+                &DebugUnpretty(
+                    FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(
+                        self.access_mask,
+                        None,
+                    ),
+                ),
+            )
             .finish()
     }
 }
 
 impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     #[inline]
-    pub fn new_allow( sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_allow(
+        sid: impl IntoVSID<'r>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+    ) -> Self {
         Self {
             entry_type: AceType::AccessAllow,
             sid: sid.into_vsid(),
@@ -77,7 +85,11 @@ impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
     }
 
     #[inline]
-    pub fn new_deny( sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_deny(
+        sid: impl IntoVSID<'r>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+    ) -> Self {
         Self {
             entry_type: AceType::AccessDeny,
             sid: sid.into_vsid(),
@@ -90,7 +102,11 @@ impl<'r, K: IsACLKind<DACL>> ACE<'r, K> {
 
 impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
     #[inline]
-    pub fn new_audit( sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_audit(
+        sid: impl IntoVSID<'r>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+    ) -> Self {
         Self {
             entry_type: AceType::SystemAudit,
             sid: sid.into_vsid(),
@@ -101,7 +117,11 @@ impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
     }
 
     #[inline]
-    pub fn new_mandatory_label( label_sid: impl IntoVSID<'r>, flags: impl IntoAceFlags, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn new_mandatory_label(
+        label_sid: impl IntoVSID<'r>,
+        flags: impl IntoAceFlags,
+        access_mask: impl IntoAccessMask,
+    ) -> Self {
         Self {
             entry_type: AceType::SystemMandatoryLabel,
             sid: label_sid.into_vsid(),
@@ -113,7 +133,7 @@ impl<'r, K: IsACLKind<SACL>> ACE<'r, K> {
 }
 
 impl<'r, K: ACLKind> ACE<'r, K> {
-    pub fn is_match_any_sid<'s>( &self, filter: &ACEFilter ) -> bool {
+    pub fn is_match_any_sid<'s>(&self, filter: &ACEFilter) -> bool {
         if filter.never {
             return false;
         }
@@ -139,7 +159,7 @@ impl<'r, K: ACLKind> ACE<'r, K> {
         true
     }
 
-    pub fn is_match( &self, sid: &SIDRef, filter: &Option<ACEFilter> ) -> bool {
+    pub fn is_match(&self, sid: &SIDRef, filter: &Option<ACEFilter>) -> bool {
         if !self.sid.eq_to_ref(sid) {
             return false;
         }
@@ -153,7 +173,7 @@ impl<'r, K: ACLKind> ACE<'r, K> {
         true
     }
 
-    pub fn is_eq<'o>( &self, other: &ACE<'o, K>, mask: &Option<ACEMask> ) -> bool {
+    pub fn is_eq<'o>(&self, other: &ACE<'o, K>, mask: &Option<ACEMask>) -> bool {
         if self.sid != other.sid {
             return false;
         }
@@ -210,7 +230,7 @@ impl<'r, K: ACLKind> ACE<'r, K> {
 
     pub fn size(&self) -> Result<u32> {
         let sid = self.sid.as_ref().ok_or_else(|| Error::empty())?;
-        Self::calculate_entry_size( self.entry_type, sid )
+        Self::calculate_entry_size(self.entry_type, sid)
     }
 
     pub fn calculate_entry_size(entry_type: AceType, sid: &SIDRef) -> Result<u32> {
@@ -218,31 +238,31 @@ impl<'r, K: ACLKind> ACE<'r, K> {
         Ok(size)
     }
 
-    pub fn inherited_flag( &self ) -> bool {
+    pub fn inherited_flag(&self) -> bool {
         self.flags.contains(INHERITED_ACE)
     }
 
-    pub fn inherit_only_flag( &self ) -> bool {
+    pub fn inherit_only_flag(&self) -> bool {
         self.flags.contains(INHERIT_ONLY_ACE)
     }
 
-    pub fn no_propagate_inherit_flag( &self ) -> bool {
+    pub fn no_propagate_inherit_flag(&self) -> bool {
         self.flags.contains(NO_PROPAGATE_INHERIT_ACE)
     }
 
-    pub fn container_inherit_flag( &self ) -> bool {
+    pub fn container_inherit_flag(&self) -> bool {
         self.flags.contains(CONTAINER_INHERIT_ACE)
     }
 
-    pub fn object_inherit_flag( &self ) -> bool {
+    pub fn object_inherit_flag(&self) -> bool {
         self.flags.contains(OBJECT_INHERIT_ACE)
     }
 
-    pub fn successful_access_flag( &self ) -> bool {
+    pub fn successful_access_flag(&self) -> bool {
         self.flags.contains(SUCCESSFUL_ACCESS_ACE_FLAG)
     }
 
-    pub fn failed_access_flag( &self ) -> bool {
+    pub fn failed_access_flag(&self) -> bool {
         self.flags.contains(FAILED_ACCESS_ACE_FLAG)
     }
 }
@@ -260,7 +280,7 @@ impl<'r, K: ACLKind> hash::Hash for ACE<'r, K> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ACEFilter {
-    pub never: bool, 
+    pub never: bool,
 
     /// The entry's type
     pub entry_type: Option<AceType>,
@@ -307,13 +327,13 @@ impl ACEFilter {
     //
 
     #[inline]
-    pub fn set_never( mut self ) -> Self {
+    pub fn set_never(mut self) -> Self {
         self.never = true;
         self
     }
 
     #[inline]
-    pub fn unset_never( mut self ) -> Self {
+    pub fn unset_never(mut self) -> Self {
         self.never = false;
         self
     }
@@ -321,13 +341,13 @@ impl ACEFilter {
     //
 
     #[inline]
-    pub fn set_entry_type( mut self, entry_type: AceType ) -> Self {
+    pub fn set_entry_type(mut self, entry_type: AceType) -> Self {
         self.entry_type = Some(entry_type);
         self
     }
 
     #[inline]
-    pub fn unset_entry_type( mut self ) -> Self {
+    pub fn unset_entry_type(mut self) -> Self {
         self.entry_type = None;
         self
     }
@@ -335,21 +355,25 @@ impl ACEFilter {
     //
 
     #[inline]
-    pub fn set_flags( mut self, flags: impl IntoAceFlags ) -> Self {
+    pub fn set_flags(mut self, flags: impl IntoAceFlags) -> Self {
         self.flags = flags.into_ace_flags();
         self.flags_mask = self.flags;
         self
     }
 
     #[inline]
-    pub fn set_flags_with_mask( mut self, flags: impl IntoAceFlags, mask: impl IntoAceFlags ) -> Self {
+    pub fn set_flags_with_mask(
+        mut self,
+        flags: impl IntoAceFlags,
+        mask: impl IntoAceFlags,
+    ) -> Self {
         self.flags = flags.into_ace_flags();
         self.flags_mask = mask.into_ace_flags();
         self
     }
 
     #[inline]
-    pub fn unset_flags( mut self ) -> Self {
+    pub fn unset_flags(mut self) -> Self {
         self.flags = ACE_FLAGS(0);
         self.flags_mask = ACE_FLAGS(0);
         self
@@ -358,21 +382,25 @@ impl ACEFilter {
     //
 
     #[inline]
-    pub fn set_access_mask( mut self, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn set_access_mask(mut self, access_mask: impl IntoAccessMask) -> Self {
         self.access_mask = access_mask.into_access_mask();
         self.access_mask_mask = self.access_mask;
         self
     }
 
     #[inline]
-    pub fn set_access_mask_with_mask( mut self, access_mask: impl IntoAccessMask, mask: impl IntoAccessMask ) -> Self {
+    pub fn set_access_mask_with_mask(
+        mut self,
+        access_mask: impl IntoAccessMask,
+        mask: impl IntoAccessMask,
+    ) -> Self {
         self.access_mask = access_mask.into_access_mask();
         self.access_mask_mask = mask.into_access_mask();
         self
     }
 
     #[inline]
-    pub fn unset_access_mask( mut self ) -> Self {
+    pub fn unset_access_mask(mut self) -> Self {
         self.access_mask = ACCESS_MASK(0);
         self.access_mask_mask = ACCESS_MASK(0);
         self
@@ -381,10 +409,9 @@ impl ACEFilter {
     //
 
     #[inline]
-    pub fn set_inherited_flag( mut self, bit: bool ) -> Self {
-        
+    pub fn set_inherited_flag(mut self, bit: bool) -> Self {
         self.flags &= !INHERITED_ACE;
-        
+
         if bit {
             self.flags |= INHERITED_ACE;
         }
@@ -393,45 +420,71 @@ impl ACEFilter {
 
         self
     }
-
 }
 
 impl fmt::Debug for ACEFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ACEFilter")
-            .field( "never", &self.never )
-            .field( "entry_type", &self.entry_type )
-            .field( "flags", &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(self.flags, None)) )
-            .field( "flags_mask", &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(self.flags_mask, None)) )
-            .field( "access_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask, None)) )
-            .field( "access_mask_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask_mask, None)) )
+            .field("never", &self.never)
+            .field("entry_type", &self.entry_type)
+            .field(
+                "flags",
+                &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(
+                    self.flags, None,
+                )),
+            )
+            .field(
+                "flags_mask",
+                &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(
+                    self.flags_mask,
+                    None,
+                )),
+            )
+            .field(
+                "access_mask",
+                &DebugUnpretty(
+                    FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(
+                        self.access_mask,
+                        None,
+                    ),
+                ),
+            )
+            .field(
+                "access_mask_mask",
+                &DebugUnpretty(
+                    FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(
+                        self.access_mask_mask,
+                        None,
+                    ),
+                ),
+            )
             .finish()
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
- 
+
 pub trait IntoOptionalACEFilter {
-    fn into_optional_mask( self ) -> Option<ACEFilter>;
+    fn into_optional_mask(self) -> Option<ACEFilter>;
 }
 
 impl IntoOptionalACEFilter for Option<ACEFilter> {
     #[inline]
-    fn into_optional_mask( self ) -> Option<ACEFilter> {
+    fn into_optional_mask(self) -> Option<ACEFilter> {
         self
     }
 }
 
 impl IntoOptionalACEFilter for ACEFilter {
     #[inline]
-    fn into_optional_mask( self ) -> Option<ACEFilter> {
+    fn into_optional_mask(self) -> Option<ACEFilter> {
         Some(self)
     }
 }
 
 impl IntoOptionalACEFilter for bool {
     #[inline]
-    fn into_optional_mask( self ) -> Option<ACEFilter> {
+    fn into_optional_mask(self) -> Option<ACEFilter> {
         if self {
             Some(ACEFilter::all())
         } else {
@@ -440,12 +493,11 @@ impl IntoOptionalACEFilter for bool {
     }
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ACEMask {
-    pub never: bool, 
+    pub never: bool,
     pub entry_type: bool,
     pub flags: ACE_FLAGS,
     pub access_mask: ACCESS_MASK,
@@ -476,13 +528,13 @@ impl ACEMask {
     //
 
     #[inline]
-    pub fn set_never( mut self ) -> Self {
+    pub fn set_never(mut self) -> Self {
         self.never = true;
         self
     }
 
     #[inline]
-    pub fn unset_never( mut self ) -> Self {
+    pub fn unset_never(mut self) -> Self {
         self.never = false;
         self
     }
@@ -490,13 +542,13 @@ impl ACEMask {
     //
 
     #[inline]
-    pub fn set_entry_type( mut self ) -> Self {
+    pub fn set_entry_type(mut self) -> Self {
         self.entry_type = true;
         self
     }
 
     #[inline]
-    pub fn unset_entry_type( mut self ) -> Self {
+    pub fn unset_entry_type(mut self) -> Self {
         self.entry_type = false;
         self
     }
@@ -504,13 +556,13 @@ impl ACEMask {
     //
 
     #[inline]
-    pub fn set_flags( mut self, flags: impl IntoAceFlags ) -> Self {
+    pub fn set_flags(mut self, flags: impl IntoAceFlags) -> Self {
         self.flags = flags.into_ace_flags();
         self
     }
 
     #[inline]
-    pub fn unset_flags( mut self ) -> Self {
+    pub fn unset_flags(mut self) -> Self {
         self.flags = ACE_FLAGS(0);
         self
     }
@@ -518,14 +570,13 @@ impl ACEMask {
     //
 
     #[inline]
-    pub fn set_access_mask( mut self, access_mask: impl IntoAccessMask ) -> Self {
+    pub fn set_access_mask(mut self, access_mask: impl IntoAccessMask) -> Self {
         self.access_mask = access_mask.into_access_mask();
         self
     }
 
-
     #[inline]
-    pub fn unset_access_mask( mut self ) -> Self {
+    pub fn unset_access_mask(mut self) -> Self {
         self.access_mask = ACCESS_MASK(0);
         self
     }
@@ -533,43 +584,54 @@ impl ACEMask {
     //
 
     #[inline]
-    pub fn set_inherited_flag( mut self ) -> Self {
+    pub fn set_inherited_flag(mut self) -> Self {
         self.flags |= INHERITED_ACE;
         self
     }
-
 }
 
 impl fmt::Debug for ACEMask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ACEMask")
-            .field( "never", &self.never )
-            .field( "entry_type", &self.entry_type )
-            .field( "flags", &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(self.flags, None)) )
-            .field( "access_mask", &DebugUnpretty(FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(self.access_mask, None)) )
+            .field("never", &self.never)
+            .field("entry_type", &self.entry_type)
+            .field(
+                "flags",
+                &DebugUnpretty(AceFlagsRepresenter::<AceFlagsShortIdents>::new(
+                    self.flags, None,
+                )),
+            )
+            .field(
+                "access_mask",
+                &DebugUnpretty(
+                    FileAccessRightsRepresenter::<FileAccessRightsShortIdents>::new(
+                        self.access_mask,
+                        None,
+                    ),
+                ),
+            )
             .finish()
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
- 
+
 pub trait IntoOptionalACEMask {
-    fn into_optional_mask( self ) -> Option<ACEMask>;
+    fn into_optional_mask(self) -> Option<ACEMask>;
 }
 
 impl IntoOptionalACEMask for Option<ACEMask> {
     #[inline]
-    fn into_optional_mask( self ) -> Option<ACEMask> {
+    fn into_optional_mask(self) -> Option<ACEMask> {
         self
     }
 }
 
 impl IntoOptionalACEMask for ACEMask {
     #[inline]
-    fn into_optional_mask( self ) -> Option<ACEMask> {
+    fn into_optional_mask(self) -> Option<ACEMask> {
         Some(self)
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-

@@ -2,144 +2,39 @@
 
 #![allow(non_snake_case)]
 
-use core::{
-    mem::offset_of,
-    ffi::c_void,
-    ptr::{null, null_mut},
-    mem::MaybeUninit,
-    marker::PhantomData,
-    fmt,
-    hash,
-};
-use std::{
-    os::windows::io::RawHandle, path::Path
-};
-use windows::{
-    core::{
-        Error, Result, HRESULT, PWSTR,
-    },
-    Win32::{
-        Foundation::{
-            HANDLE, ERROR_SUCCESS,
-        },
-        Security::{
-            Authorization::{
-                SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
-                SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, INHERITED_FROMW, GetInheritanceSourceW, TRUSTEE_W,
-            },
-            AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce,
-            GetAce, GetAclInformation, InitializeAcl, IsValidAcl,
-            AclSizeInformation, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE,
-            ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE,
-            ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE,
-            ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
-            FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, 
-            SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE,
-            SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE,
-            SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, ACE_HEADER, ACE_FLAGS, GENERIC_MAPPING,
-        },
-        System::SystemServices::{
-            ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, 
-            ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, 
-            ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, MAXDWORD, 
-            SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, 
-            SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
-        },
-        Storage::FileSystem::{
-            // FILE_ACCESS_RIGHTS,
-        }
-    },
-};
 use crate::{
-    ace::ACE, acl::{
-        ACEWithInheritedFromIterator, ACLEntryIterator, ACLVecList, AceEntryIterator, ACL
-    }, 
-    acl_kind::{ACLKind, DACL, SACL}, 
-    winapi::sid::{SIDRef, VSID}, 
-    types::*, 
-    utils::DebugUnpretty, 
+    ace::ACE,
+    acl::{ACEWithInheritedFromIterator, ACLEntryIterator, ACLVecList, AceEntryIterator, ACL},
+    acl_kind::{DACL, SACL},
+    types::*,
+    utils::DebugUnpretty,
+    winapi::sid::{SIDRef},
     winapi::{
         api::ErrorExt,
         privilege::Privilege,
-        security_descriptor::{
-            SecurityDescriptorSource, WindowsSecurityDescriptor,
-        }
-    }, SID 
-    
+        security_descriptor::{SecurityDescriptorSource, WindowsSecurityDescriptor},
+    },
+    SID,
+};
+use core::{
+    fmt, 
+    ptr::{null},
+};
+use std::{os::windows::io::RawHandle, path::Path};
+use windows::{
+    core::{Error, Result},
+    Win32::{
+        Foundation::{ HANDLE},
+        Security::{
+            Authorization::{
+                SE_FILE_OBJECT, SE_KERNEL_OBJECT,
+                SE_OBJECT_TYPE, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY,
+            },
+        },
+    },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-trait Helper<'r, K: ACLKind> {
-    // type Input: ACLEntryIterator<'r, K>;
-    type Output: ACLEntryIterator<'r, K>;
-    // fn call(&self, iter: Self::Input) -> Result<Self::Output>;
-    fn call(&self, iter: AceEntryIterator<'r, K>) -> Result<Self::Output>;
-}
-
-// impl<'r, F, T, R, K> Helper<'r, K> for F
-impl<'r, F, R, K> Helper<'r, K> for F
-where
-    // F: Fn(T) -> Result<R>,
-    F: Fn(AceEntryIterator<'r, K>) -> Result<R>,
-    // T: ACLEntryIterator<'r, K>,
-    R: ACLEntryIterator<'r, K>,
-    K: ACLKind,
-{
-    // type Input = T;
-    type Output = R;
-    // fn call(&self, iter: T) -> Result<R> {
-    fn call(&self, iter: AceEntryIterator<'r, K>) -> Result<R> {
-        self(iter)
-    }
-}
-
-// fn destination<F, K>(f: F)
-// where
-//     F: for<'t> Helper<'t, K>,
-//     K: ACLKind,
-// {
-//     let value = 10;
-//     let _ret = f.call(&value);
-// }
-
-// trait Lo<'r, K: ACLKind> {
-//     type I: ACLEntryIterator<'r, K>;
-// }
-// trait Lo<'r, K: ACLKind> {
-//     type I: ACLEntryIterator<'r, K>;
-// }
-// impl<'r, I, K> Lo<'r, K> for I where I: ACLEntryIterator<'r, K>, K: ACLKind {
-//     type I = I;
-// }
-
-// trait Hi<K: ACLKind>: for<'r> Lo<'r, K> {}
-// impl<I, K> Hi<K> for I where I: for<'r> Lo<'r, K>, K: ACLKind {}
-
-// pub trait ACLEntryIteratorFnLt<'r, T, R, K>: Fn(T) -> Result<R> where K: ACLKind, T: ACLEntryIterator<'r, K>, R: ACLEntryIterator<'r, K> {}
-// impl<'r, F, T, R, K> ACLEntryIteratorFnLt<'r, T, R, K> for F where F: Fn(T) -> Result<R>, K: ACLKind, T: ACLEntryIterator<'r, K>, R: ACLEntryIterator<'r, K> {}
-
-// pub trait ACLEntryIteratorFn<T, R, K>: for<'r> ACLEntryIteratorFnLt<'r, <T as Lo<'r, K>>::I, <R as Lo<'r, K>>::I, K> where K: ACLKind, T: Hi<K>, R: Hi<K> {}
-// impl<F, T, R, K> ACLEntryIteratorFn<T, R, K> for F where F: for<'r> ACLEntryIteratorFnLt<'r, <T as Lo<'r, K>>::I, <R as Lo<'r, K>>::I, K>, K: ACLKind, T: Hi<K>, R: Hi<K> {}
-
-pub trait ACLEntryIteratorFnLt<'t, 'r, R, K>: Fn(AceEntryIterator<'t, K>) -> Result<R> where 't: 'r, K: ACLKind, R: ACLEntryIterator<'r, K> {}
-impl<'t, 'r, F, R, K> ACLEntryIteratorFnLt<'t, 'r, R, K> for F where 't: 'r, F: Fn(AceEntryIterator<'t, K>) -> Result<R>, K: ACLKind, R: ACLEntryIterator<'r, K> {}
-
-pub trait ACLEntryIteratorFn<'t, 'r, K>: ACLEntryIteratorFnLt<'t, 'r, Self::R, K> where 't: 'r, K: ACLKind {
-    type R: ACLEntryIterator<'r, K>;
-}
-impl<'t, 'r, F, R, K> ACLEntryIteratorFn<'t, 'r, K> for F where 't: 'r, F: Fn(AceEntryIterator<'t, K>) -> Result<R>, K: ACLKind, R: ACLEntryIterator<'r, K> {
-    type R = R;
-}
-
-// pub trait ACLEntryIteratorFn<K>: for<'r> Fn(AceEntryIterator<'r, K>) -> Result<R> where K: ACLKind {
-//     type R: Hi<K>;
-// }
-
-// impl<F, R, K> ACLEntryIteratorFn<K> for F where F: for<'r> Fn(AceEntryIterator<'r, K>) -> Result<R>, K: ACLKind {
-//     type R = R;
-// }
-
 
 /// `SD` represents the access control list (discretionary or oth discretionary/system) for a named object
 pub struct SecurityDescriptor {
@@ -151,9 +46,7 @@ pub struct SecurityDescriptor {
 }
 
 impl SecurityDescriptor {
-    pub fn from_source(
-        source: SecurityDescriptorSource,
-    ) -> Self {
+    pub fn from_source(source: SecurityDescriptorSource) -> Self {
         Self {
             descriptor: WindowsSecurityDescriptor::new(),
             source,
@@ -177,13 +70,8 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_handle(
-        handle: HANDLE,
-        object_type: SE_OBJECT_TYPE,
-    ) -> Self {
-        Self::from_source(
-            SecurityDescriptorSource::from_handle(handle, object_type)
-        )
+    pub fn from_handle(handle: HANDLE, object_type: SE_OBJECT_TYPE) -> Self {
+        Self::from_source(SecurityDescriptorSource::from_handle(handle, object_type))
     }
 
     /// Creates an `SD` object from a specified file handle.
@@ -234,10 +122,7 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_registry_handle(
-        handle: HANDLE,
-        is_wow6432key: bool,
-    ) -> Self {
+    pub fn from_registry_handle(handle: HANDLE, is_wow6432key: bool) -> Self {
         if is_wow6432key {
             Self::from_handle(handle, SE_REGISTRY_WOW64_32KEY)
         } else {
@@ -259,13 +144,8 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_path(
-        path: &Path,
-        object_type: SE_OBJECT_TYPE,
-    ) -> Self {
-        Self::from_source(
-            SecurityDescriptorSource::from_path(path, object_type)
-        )
+    pub fn from_path(path: &Path, object_type: SE_OBJECT_TYPE) -> Self {
+        Self::from_source(SecurityDescriptorSource::from_path(path, object_type))
     }
 
     /// Creates an `SD` object from a specified file path.
@@ -312,10 +192,7 @@ impl SecurityDescriptor {
     ///
     /// # Errors
     /// On error, a Windows error code is wrapped in an `Err` type.
-    pub fn from_registry_path(
-        path: &Path,
-        is_wow6432key: bool,
-    ) -> Self {
+    pub fn from_registry_path(path: &Path, is_wow6432key: bool) -> Self {
         if is_wow6432key {
             Self::from_path(path, SE_REGISTRY_WOW64_32KEY)
         } else {
@@ -325,15 +202,15 @@ impl SecurityDescriptor {
 
     //
 
-    pub fn enable_sacl( &mut self, enabled: bool ) {
+    pub fn enable_sacl(&mut self, enabled: bool) {
         self.sacl_enabled = enabled;
     }
 
-    pub fn allow_read_with_backup_privilege( &mut self, allowed: bool ) {
+    pub fn allow_read_with_backup_privilege(&mut self, allowed: bool) {
         self.allow_read_with_backup_privilege = allowed;
     }
 
-    pub fn allow_write_with_restore_privilege( &mut self, allowed: bool ) {
+    pub fn allow_write_with_restore_privilege(&mut self, allowed: bool) {
         self.allow_write_with_restore_privilege = allowed;
     }
 
@@ -374,99 +251,67 @@ impl SecurityDescriptor {
 
     //
 
-    pub fn dacl( &self ) -> ACL<'_, DACL> {
+    pub fn dacl(&self) -> ACL<'_, DACL> {
         let dacl = self.descriptor.dacl().unwrap_or(null());
         unsafe { ACL::from_pacl(dacl) }
     }
 
-    pub fn set_dacl( &mut self, dacl: ACLVecList<DACL> ) -> Result<()> {
+    unsafe fn dacl_as_static(&self) -> ACL<'static, DACL> {
+        let dacl = self.descriptor.dacl().unwrap_or(null());
+        unsafe { ACL::from_pacl(dacl) }
+    }
+
+    pub fn set_dacl(&mut self, dacl: ACLVecList<DACL>) -> Result<()> {
         self.descriptor.set_dacl(dacl.into_vec())
     }
 
-    fn inner_set_dacl( &mut self, dacl: Vec<u8> ) -> Result<()> {
-        self.descriptor.set_dacl(dacl)
-    }
-
-
-    // pub fn new_dacl<'r, 's: 'r, F, R>( &'s self, f: F ) -> Result<Vec<u8>>
-    // where
-    //     F: ACLEntryIteratorFn<'r, AceEntryIterator<'r, DACL>, R, DACL>, 
-    //     R: ACLEntryIterator<'r, DACL>
-    // {
-    //     let dacl = self.dacl();
-
-    //     let mut new_dacl = f(dacl.iter())?
-    //         .try_collect::<ACLVecList<DACL>>()?
-    //         .into_vec();
-
-    //     Ok(new_dacl)
-    // }
-
-    // pub fn update_dacl<'r, 's, F, R>( &'s mut self, f: F ) -> Result<()>
-    // where
-    //     F: Fn(AceEntryIterator<'_, DACL>) -> R,
-    //     R: ACLEntryIterator<'r, DACL>,
-    // {
-    //     self.inner_update_dacl::<AceEntryIterator<'_, DACL>, R, F>(f)
-    // }
-
-    pub fn update_dacl<F>( &mut self, f: F ) -> Result<()>
+    pub fn update_dacl<'s, 't, 'r, R, F>(&'s mut self, f: F) -> Result<()>
     where
-        // F: for<'r> Helper<'r, DACL, Input = AceEntryIterator<'r, DACL>>,
-        F: for<'r> Helper<'r, DACL>,
-        // F: for<'t> ACLEntryIteratorFn<', 'r, DACL>,
-        // F: ACLEntryIteratorFn<AceEntryIterator<'_, DACL>, R, DACL>, 
-        //for<'x> F: Fn(AceEntryIterator<'x, DACL>) -> Result<R>, 
-        // for<'q> T: ACLEntryIterator<'t, DACL>,
-        // F: ACLEntryIteratorFn<'t, 't, AceEntryIterator<'t, DACL>, R, DACL>, 
-        //R: ACLEntryIterator<'x, DACL>
+        's: 't,
+        't: 'r,
+        F: Fn(AceEntryIterator<'t, DACL>) -> Result<R>,
+        R: ACLEntryIterator<'r, DACL>,
     {
-        let iter = self.dacl().iter();
-        // let iter = self.owner()?.unwrap();
-        // f.call(iter);
+        // Dirty hack :(. But it works in proper way.
+        let dacl = unsafe { self.dacl_as_static() };
+        let iter = dacl.iter();
 
-        let new_dacl = f.call(iter)?
-            .try_collect::<ACLVecList<DACL>>()?
-            .into_vec();
+        let new_dacl = f(iter)?.try_collect::<ACLVecList<DACL>>()?;
 
-        // let new_dacl = self.new_dacl(f)?;
-
-        self.inner_set_dacl(new_dacl)
+        self.set_dacl(new_dacl)
     }
 
-    pub fn iter_dacl_with_inheritance_source( &self ) -> Result<ACEWithInheritedFromIterator<'_, DACL>> {
+    pub fn iter_dacl_with_inheritance_source(
+        &self,
+    ) -> Result<ACEWithInheritedFromIterator<'_, DACL>> {
         let dacl = self.descriptor.dacl().unwrap_or(null());
 
-        let inherited_from = self.descriptor.get_inheritance_source::<DACL>(
-            &self.source,
-            dacl,
-        )?;
+        let inherited_from = self
+            .descriptor
+            .get_inheritance_source::<DACL>(&self.source, dacl)?;
 
-        let iter = ACEWithInheritedFromIterator::new( 
-            dacl, 
-            inherited_from
-        );
+        let iter = ACEWithInheritedFromIterator::new(dacl, inherited_from);
 
         Ok(iter)
     }
 
     //
 
-    pub fn dacl_is_protected( &self ) -> bool {
+    pub fn dacl_is_protected(&self) -> bool {
         self.descriptor.dacl_is_protected()
     }
 
-    pub fn set_dacl_is_protected( &mut self, is_protected: bool ) -> Result<()> {
+    pub fn set_dacl_is_protected(&mut self, is_protected: bool) -> Result<()> {
         self.descriptor.set_dacl_is_protected(is_protected)
     }
 
-    pub fn unset_dacl_is_protected( &mut self ) -> Result<()> {
+    pub fn unset_dacl_is_protected(&mut self) -> Result<()> {
         self.descriptor.unset_dacl_is_protected()
     }
 
     //
 
-    pub fn sacl( &self ) -> ACL<'_, SACL> {
+    pub fn sacl(&self) -> ACL<'_, SACL> {
         if !self.sacl_enabled {
             return ACL::from_null();
         }
@@ -475,7 +320,12 @@ impl SecurityDescriptor {
         unsafe { ACL::from_pacl(sacl) }
     }
 
-    pub fn set_sacl( &mut self, dacl: ACLVecList<SACL> ) -> Result<()> {
+    unsafe fn sacl_as_static(&self) -> ACL<'static, SACL> {
+        let sacl = self.descriptor.sacl().unwrap_or(null());
+        unsafe { ACL::from_pacl(sacl) }
+    }
+
+    pub fn set_sacl(&mut self, dacl: ACLVecList<SACL>) -> Result<()> {
         if !self.sacl_enabled {
             return Err(Error::empty());
         }
@@ -483,51 +333,47 @@ impl SecurityDescriptor {
         self.descriptor.set_sacl(dacl.into_vec())
     }
 
-    fn inner_set_sacl( &mut self, sacl: Vec<u8> ) -> Result<()> {
-        self.descriptor.set_sacl(sacl)
-    }
-
-    pub fn update_sacl<'r, F, R>( &mut self, f: F ) -> Result<()>
+    pub fn update_sacl<'s, 't, 'r, R, F>(&'s mut self, f: F) -> Result<()>
     where
-        F: Fn(AceEntryIterator<'_, SACL>) -> Result<R>,
+        's: 't,
+        't: 'r,
+        F: Fn(AceEntryIterator<'t, SACL>) -> Result<R>,
         R: ACLEntryIterator<'r, SACL>,
     {
         if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
-        let sacl = self.sacl();
+        // Dirty hack :(. But it works in proper way.
+        let sacl = unsafe { self.sacl_as_static() };
+        let iter = sacl.iter();
 
-        let new_sacl = f(sacl.iter())?
-            .try_collect::<ACLVecList<SACL>>()?
-            .into_vec();
+        let new_sacl = f(iter)?.try_collect()?;
 
-        self.inner_set_sacl(new_sacl)
+        self.set_sacl(new_sacl)
     }
 
-    pub fn iter_sacl_with_inheritance_source( &self ) -> Result<ACEWithInheritedFromIterator<'_, SACL>> {
+    pub fn iter_sacl_with_inheritance_source(
+        &self,
+    ) -> Result<ACEWithInheritedFromIterator<'_, SACL>> {
         if !self.sacl_enabled {
             return Err(Error::empty());
         }
 
         let sacl = self.descriptor.sacl().unwrap_or(null());
 
-        let inherited_from = self.descriptor.get_inheritance_source::<SACL>(
-            &self.source,
-            sacl,
-        )?;
+        let inherited_from = self
+            .descriptor
+            .get_inheritance_source::<SACL>(&self.source, sacl)?;
 
-        let iter = ACEWithInheritedFromIterator::new( 
-            sacl, 
-            inherited_from
-        );
+        let iter = ACEWithInheritedFromIterator::new(sacl, inherited_from);
 
         Ok(iter)
     }
 
     //
 
-    pub fn sacl_is_protected( &self ) -> bool {
+    pub fn sacl_is_protected(&self) -> bool {
         if !self.sacl_enabled {
             return false;
         }
@@ -535,7 +381,7 @@ impl SecurityDescriptor {
         self.descriptor.sacl_is_protected()
     }
 
-    pub fn set_sacl_is_protected( &mut self, is_protected: bool ) -> Result<()> {
+    pub fn set_sacl_is_protected(&mut self, is_protected: bool) -> Result<()> {
         if !self.sacl_enabled {
             return Err(Error::empty());
         }
@@ -543,7 +389,7 @@ impl SecurityDescriptor {
         self.descriptor.set_sacl_is_protected(is_protected)
     }
 
-    pub fn unset_sacl_is_protected( &mut self ) -> Result<()> {
+    pub fn unset_sacl_is_protected(&mut self) -> Result<()> {
         if !self.sacl_enabled {
             return Err(Error::empty());
         }
@@ -559,90 +405,68 @@ impl SecurityDescriptor {
     /// This is invoked automatically after any add/remove entry operation.
     pub fn read(&mut self) -> Result<()> {
         if self.sacl_enabled {
-            Privilege::with_security(|| {
-                self.inner_read()
-            })
+            Privilege::with_security(|| self.inner_read())
         } else {
             self.inner_read()
         }
     }
 
     fn inner_read(&mut self) -> Result<()> {
-        match self.descriptor.read(
-            &self.source,
-            self.sacl_enabled,
-        ) {
+        match self.descriptor.read(&self.source, self.sacl_enabled) {
             Ok(()) => {
                 return Ok(());
-            },
-            Err(e) if e.is_access_denied() && self.allow_read_with_backup_privilege => {}, 
+            }
+            Err(e) if e.is_access_denied() && self.allow_read_with_backup_privilege => {}
             Err(e) => {
                 return Err(e);
             }
         };
 
-        Privilege::with_backup(|| {
-            self.descriptor.read(
-                &self.source,
-                self.sacl_enabled,
-            )            
-        })
+        Privilege::with_backup(|| self.descriptor.read(&self.source, self.sacl_enabled))
     }
 
     //
 
-    pub fn write( &mut self ) -> Result<()> {
+    pub fn write(&mut self) -> Result<()> {
         if self.sacl_enabled && self.descriptor.sacl_is_modified() {
-            Privilege::with_security(|| {
-                self.inner_write()
-            })
+            Privilege::with_security(|| self.inner_write())
         } else {
             self.inner_write()
         }
     }
 
-    fn inner_write( &mut self ) -> Result<()> {
-        match self.descriptor.write(
-            &self.source,
-            self.sacl_enabled,
-        ) {
+    fn inner_write(&mut self) -> Result<()> {
+        match self.descriptor.write(&self.source, self.sacl_enabled) {
             Ok(()) => {
                 return Ok(());
-            },
-            Err(e) if e.is_access_denied() && self.allow_write_with_restore_privilege => {}, 
+            }
+            Err(e) if e.is_access_denied() && self.allow_write_with_restore_privilege => {}
             Err(e) => {
                 return Err(e);
             }
         };
 
-        Privilege::with_restore(|| {
-            self.descriptor.write(
-                &self.source,
-                self.sacl_enabled,
-            )            
-        })
+        Privilege::with_restore(|| self.descriptor.write(&self.source, self.sacl_enabled))
     }
 
     //
 
-    pub fn write_and_reload( &mut self ) -> Result<()> {
+    pub fn write_and_reload(&mut self) -> Result<()> {
         if self.sacl_enabled {
-            Privilege::with_security(|| {
-                self.inner_write_and_reload()
-            })
+            Privilege::with_security(|| self.inner_write_and_reload())
         } else {
             self.inner_write_and_reload()
         }
     }
 
-    fn inner_write_and_reload( &mut self ) -> Result<()> {
+    fn inner_write_and_reload(&mut self) -> Result<()> {
         self.inner_write()?;
         self.inner_read()
     }
 
     //
 
-    pub fn take_ownership<'s>( &self ) -> Result<()> {
+    pub fn take_ownership<'s>(&self) -> Result<()> {
         let current_user = SID::current_user()?;
         Privilege::with_take_ownership(|| {
             WindowsSecurityDescriptor::take_ownership(&self.source, current_user.as_ref())
@@ -651,16 +475,15 @@ impl SecurityDescriptor {
 
     //
 
-    pub fn get_effective_access_rigths( &self, sid: &SIDRef ) -> Result<ACCESS_MASK> {
+    pub fn get_effective_access_rigths(&self, sid: &SIDRef) -> Result<ACCESS_MASK> {
         let access_mask = self.descriptor.get_effective_access_rights(sid)?;
         Ok(ACCESS_MASK(access_mask))
     }
 
-    fn dacl_all( &self ) -> Result<Vec<ACE<'_, DACL>>> {
+    fn dacl_all(&self) -> Result<Vec<ACE<'_, DACL>>> {
         let d = self.dacl();
         d.all()
     }
-
 }
 
 impl fmt::Debug for SecurityDescriptor {
@@ -671,12 +494,12 @@ impl fmt::Debug for SecurityDescriptor {
         let group = self.group().unwrap_or_default();
 
         f.debug_struct("SD")
-            .field("dacl_is_protected", &self.dacl_is_protected() )
-            .field("sacl_is_protected", &self.sacl_is_protected() )
-            .field("dacl", &dacl_entries )
-            .field("sacl", &sacl_entries )
-            .field("owner", &DebugUnpretty(owner) )
-            .field("group", &DebugUnpretty(group) )
+            .field("dacl_is_protected", &self.dacl_is_protected())
+            .field("sacl_is_protected", &self.sacl_is_protected())
+            .field("dacl", &dacl_entries)
+            .field("sacl", &sacl_entries)
+            .field("owner", &DebugUnpretty(owner))
+            .field("group", &DebugUnpretty(group))
             .finish()
     }
 }

@@ -1,36 +1,63 @@
 #![cfg(windows)]
 
 use crate::{
-    DACL, ACCESS_MASK, ACE, ACEFilter, ACEMask, ACLEntryIterator, ACLKind, AceType, IntoOptionalACEFilter, IntoOptionalACEMask, SID, SecurityDescriptor, VSID, acl::AceEntryIterator, helper::DebugUnpretty, utils::current_user_account_name, winapi::api::ErrorExt
-};
-use std::{
-    env::current_exe, ffi::{OsStr, OsString}, fs::{File, OpenOptions}, os::windows::{
-        fs::OpenOptionsExt,
-        io::AsRawHandle,
-    }, path::PathBuf, process::Command, str::FromStr
+    acl::AceEntryIterator, helper::DebugUnpretty, utils::current_user_account_name,
+    winapi::api::ErrorExt, ACEFilter, ACEMask, ACLEntryIterator, ACLKind, AceType,
+    IntoOptionalACEMask, SecurityDescriptor, ACE, DACL, SID, VSID,
 };
 use core::ffi::c_void;
+use fallible_iterator::FallibleIterator;
+use std::{
+    env::current_exe,
+    ffi::{OsStr, OsString},
+    fs::{File, OpenOptions},
+    os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
+    path::PathBuf,
+    process::Command,
+    str::FromStr,
+};
 use windows::{
-    core::{
-        Error, Result, HRESULT,
-    },
+    core::{Error, Result, HRESULT},
     Win32::{
-        Foundation::{
-            ERROR_NOT_ALL_ASSIGNED, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, HANDLE
-        }, Security::{
-            AclSizeInformation, AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce, AddAuditAccessAceEx, AddMandatoryAce, Authorization::{
-                SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE, SE_OBJECT_TYPE,
-                SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY, SE_REGISTRY_WOW64_32KEY, SE_SERVICE,
-                SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT, SE_WMIGUID_OBJECT,
-            }, CopySid, EqualSid, GetAce, GetAclInformation, GetLengthSid, InitializeAcl, IsValidAcl, IsValidSid, WinAccountGuestSid, WinWorldSid, ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE, ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, ACE_FLAGS, ACE_HEADER, ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID, SECURITY_WORLD_SID_AUTHORITY, SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE, SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, WELL_KNOWN_SID_TYPE
-        }, Storage::FileSystem::{
-            FILE_ACCESS_RIGHTS, FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, SYNCHRONIZE, WRITE_DAC
-        }, System::SystemServices::{
-            ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, DOMAIN_GROUP_RID_USERS, DOMAIN_USER_RID_ADMIN, DOMAIN_USER_RID_GUEST, MAXDWORD, SECURITY_WORLD_RID, SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP, SYSTEM_MANDATORY_LABEL_NO_READ_UP, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE
-        }
+        Foundation::{ERROR_NOT_ALL_ASSIGNED, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, HANDLE},
+        Security::{
+            AclSizeInformation, AddAccessAllowedAceEx, AddAccessDeniedAceEx, AddAce,
+            AddAuditAccessAceEx, AddMandatoryAce,
+            Authorization::{
+                SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_LMSHARE,
+                SE_OBJECT_TYPE, SE_PRINTER, SE_PROVIDER_DEFINED_OBJECT, SE_REGISTRY_KEY,
+                SE_REGISTRY_WOW64_32KEY, SE_SERVICE, SE_UNKNOWN_OBJECT_TYPE, SE_WINDOW_OBJECT,
+                SE_WMIGUID_OBJECT,
+            },
+            CopySid, EqualSid, GetAce, GetAclInformation, GetLengthSid, InitializeAcl, IsValidAcl,
+            IsValidSid, WinAccountGuestSid, WinWorldSid, ACCESS_ALLOWED_ACE,
+            ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE,
+            ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_ACE, ACCESS_DENIED_CALLBACK_ACE,
+            ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, ACE_FLAGS, ACE_HEADER,
+            ACL as _ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
+            FAILED_ACCESS_ACE_FLAG, INHERITED_ACE, OBJECT_INHERIT_ACE, PSID,
+            SECURITY_WORLD_SID_AUTHORITY, SUCCESSFUL_ACCESS_ACE_FLAG, SYSTEM_AUDIT_ACE,
+            SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_OBJECT_ACE,
+            SYSTEM_MANDATORY_LABEL_ACE, SYSTEM_RESOURCE_ATTRIBUTE_ACE, WELL_KNOWN_SID_TYPE,
+        },
+        Storage::FileSystem::{
+            FILE_ACCESS_RIGHTS, FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+            FILE_GENERIC_WRITE, SYNCHRONIZE, WRITE_DAC,
+        },
+        System::SystemServices::{
+            ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE,
+            ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_ALLOWED_OBJECT_ACE_TYPE,
+            ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE,
+            ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE,
+            DOMAIN_GROUP_RID_USERS, DOMAIN_USER_RID_ADMIN, DOMAIN_USER_RID_GUEST, MAXDWORD,
+            SECURITY_WORLD_RID, SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE,
+            SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_AUDIT_OBJECT_ACE_TYPE,
+            SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP,
+            SYSTEM_MANDATORY_LABEL_NO_READ_UP, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+            SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE,
+        },
     },
 };
-use fallible_iterator::FallibleIterator;
 
 fn support_path() -> Option<PathBuf> {
     if let Ok(mut path) = current_exe() {
@@ -118,7 +145,11 @@ fn sidstring_unit_test() {
     assert_eq!(sid_string, world_string_sid);
 }
 
-fn acl_entry_exists<'r, 'e, K: ACLKind>(entries: &Vec<ACE<'r, K>>, expected: &ACE<'e, K>, mask: impl IntoOptionalACEMask) -> Option<usize> {
+fn acl_entry_exists<'r, 'e, K: ACLKind>(
+    entries: &Vec<ACE<'r, K>>,
+    expected: &ACE<'e, K>,
+    mask: impl IntoOptionalACEMask,
+) -> Option<usize> {
     // println!("entries = {:#?}", entries);
     // println!("expected = {:#?}", expected);
 
@@ -146,18 +177,23 @@ struct SIDs {
 impl SIDs {
     fn new() -> Self {
         let current_user = SID::current_user().unwrap();
-        let current_domain = current_user.get_domain_of().unwrap(); 
-        let guest = SID::well_known( WinAccountGuestSid, Some(&current_domain) ).unwrap();
-        let world = SID::well_known( WinWorldSid, None ).unwrap();
+        let current_domain = current_user.get_domain_of().unwrap();
+        let guest = SID::well_known(WinAccountGuestSid, Some(&current_domain)).unwrap();
+        let world = SID::well_known(WinWorldSid, None).unwrap();
 
-        assert_eq!( world.to_string().unwrap(), "S-1-1-0" );
+        assert_eq!(world.to_string().unwrap(), "S-1-1-0");
 
         Self {
             current_user,
             current_domain,
             guest,
             world,
-            test: SID::from_account_name(&OsString::from("test"), Some(&OsString::from("ksv-auto"))).unwrap().0,
+            test: SID::from_account_name(
+                &OsString::from("test"),
+                Some(&OsString::from("ksv-auto")),
+            )
+            .unwrap()
+            .0,
         }
     }
 }
@@ -267,7 +303,6 @@ fn query_sacl_unit_test() {
     // assert!(allow_idx > 0);
 }
 
-
 // Ensure that we can add and remove DACL access allow entries
 fn add_and_remove_dacl_allow(use_handle: bool) {
     let sids = SIDs::new();
@@ -291,7 +326,7 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
 
     let mut sd = if use_handle {
         file = OpenOptions::new()
-            .access_mode(GENERIC_READ.0 | WRITE_DAC.0 )
+            .access_mode(GENERIC_READ.0 | WRITE_DAC.0)
             .open(&path)
             .unwrap();
         SecurityDescriptor::from_file_raw_handle(file.as_raw_handle())
@@ -300,14 +335,15 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
     };
     sd.read().unwrap();
 
-    sd.update_dacl(|dacl: AceEntryIterator<'_, DACL>| {
+    sd.update_dacl(|dacl| {
         dacl.add_allow(
             &sids.current_user,
             0,
             FILE_GENERIC_READ | FILE_GENERIC_WRITE,
             None,
         )
-    }).unwrap();
+    })
+    .unwrap();
 
     sd.write().unwrap();
 
@@ -339,7 +375,8 @@ fn add_and_remove_dacl_allow(use_handle: bool) {
             sids.current_user.as_ref(),
             ACEFilter::new().set_entry_type(AceType::AccessAllow),
         )
-    }).unwrap();
+    })
+    .unwrap();
 
     sd.write().unwrap();
 
@@ -384,7 +421,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     //             that the path exists (see line 375), this will attempt to open for write, which
     //             should succeed
     let create_res = OpenOptions::new()
-        .access_mode(GENERIC_WRITE.0 | WRITE_DAC.0 )
+        .access_mode(GENERIC_WRITE.0 | WRITE_DAC.0)
         .open(&path);
     assert!(create_res.is_ok());
     let file = create_res.unwrap();
@@ -397,13 +434,9 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     sd.read().unwrap();
 
     sd.update_dacl(|dacl: AceEntryIterator<'_, DACL>| {
-        dacl.add_deny(
-            &sids.current_user, 
-            0, 
-            FILE_GENERIC_WRITE,
-            None
-        )
-    }).unwrap();
+        dacl.add_deny(&sids.current_user, 0, FILE_GENERIC_WRITE, None)
+    })
+    .unwrap();
 
     sd.write().unwrap();
 
@@ -415,11 +448,7 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
     let mut entries = sd.dacl().all().unwrap();
     assert_ne!(entries.len(), 0);
 
-    let expected = ACE::new_deny(
-        &sids.current_user,
-        0,
-        FILE_GENERIC_WRITE,
-    );
+    let expected = ACE::new_deny(&sids.current_user, 0, FILE_GENERIC_WRITE);
 
     match acl_entry_exists(&entries, &expected, None) {
         Some(_i) => {}
@@ -435,7 +464,8 @@ fn add_and_remove_dacl_deny(use_handle: bool) {
             &sids.current_user,
             ACEFilter::new().set_entry_type(AceType::AccessDeny),
         )
-    }).unwrap();
+    })
+    .unwrap();
 
     sd.write().unwrap();
 
@@ -484,10 +514,13 @@ fn add_remove_sacl_mil() {
         sacl.add_mandatory_label(
             &low_mil_sid,
             0,
-            SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP,
-            None
+            SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
+                | SYSTEM_MANDATORY_LABEL_NO_READ_UP
+                | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP,
+            None,
         )
-    }).unwrap();
+    })
+    .unwrap();
 
     sd.write().unwrap();
 
@@ -499,7 +532,9 @@ fn add_remove_sacl_mil() {
     let expected = ACE::new_mandatory_label(
         &low_mil_sid,
         0,
-        SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP
+        SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
+            | SYSTEM_MANDATORY_LABEL_NO_READ_UP
+            | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP,
     );
 
     assert!(acl_entry_exists(&entries, &expected, None).is_some());
@@ -507,9 +542,10 @@ fn add_remove_sacl_mil() {
     sd.update_sacl(|sacl| {
         sacl.remove(
             low_mil_sid.as_ref(),
-            ACEFilter::new().set_entry_type(AceType::SystemMandatoryLabel)
+            ACEFilter::new().set_entry_type(AceType::SystemMandatoryLabel),
         )
-    }).unwrap();
+    })
+    .unwrap();
 
     sd.write().unwrap();
 
@@ -535,14 +571,8 @@ fn add_remove_sacl_audit() {
     sd.enable_sacl(true);
     sd.read().unwrap();
 
-    sd.update_sacl(|sacl| {
-        sacl.add_audit(
-            &sids.current_user,
-            0,
-            FILE_GENERIC_READ,
-            None
-        )
-    }).unwrap();
+    sd.update_sacl(|sacl| sacl.add_audit(&sids.current_user, 0, FILE_GENERIC_READ, None))
+        .unwrap();
 
     sd.write().unwrap();
 
@@ -554,17 +584,13 @@ fn add_remove_sacl_audit() {
     let expected = ACE::new_audit(
         &sids.current_user,
         SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG,
-        FILE_GENERIC_READ
+        FILE_GENERIC_READ,
     );
 
     assert!(acl_entry_exists(&entries, &expected, None).is_some());
 
-    sd.update_sacl(|sacl| {
-        sacl.remove(
-            sids.current_user.as_ref(), 
-            None
-        )
-    }).unwrap();
+    sd.update_sacl(|sacl| sacl.remove(sids.current_user.as_ref(), None))
+        .unwrap();
 
     sd.write().unwrap();
 
@@ -590,60 +616,55 @@ fn acl_get_and_remove_test() {
 
     //
 
-    let results = sd.dacl().all_filtered(
-        sids.world.as_ref(),
-        None
-    ).unwrap();
+    let results = sd.dacl().all_filtered(sids.world.as_ref(), None).unwrap();
     assert_eq!(results.len(), 0);
 
-    let results = sd.dacl().all_filtered(
-        sids.guest.as_ref(),
-        None
-    ).unwrap();
+    let results = sd.dacl().all_filtered(sids.guest.as_ref(), None).unwrap();
     assert_eq!(results.len(), 3);
 
-    let results = sd.dacl().all_filtered(
-        sids.guest.as_ref(),
-        ACEFilter::new().set_entry_type(AceType::AccessAllow)
-    ).unwrap();
+    let results = sd
+        .dacl()
+        .all_filtered(
+            sids.guest.as_ref(),
+            ACEFilter::new().set_entry_type(AceType::AccessAllow),
+        )
+        .unwrap();
     assert_eq!(results.len(), 1);
 
-    let results = sd.dacl().all_filtered(
-        sids.guest.as_ref(),
-        ACEFilter::new().set_entry_type(AceType::AccessDeny)
-    ).unwrap();
+    let results = sd
+        .dacl()
+        .all_filtered(
+            sids.guest.as_ref(),
+            ACEFilter::new().set_entry_type(AceType::AccessDeny),
+        )
+        .unwrap();
     assert_eq!(results.len(), 1);
 
-    let results = sd.sacl().all_filtered(
-        sids.guest.as_ref(),
-        ACEFilter::new().set_entry_type(AceType::SystemAudit)
-    ).unwrap();
+    let results = sd
+        .sacl()
+        .all_filtered(
+            sids.guest.as_ref(),
+            ACEFilter::new().set_entry_type(AceType::SystemAudit),
+        )
+        .unwrap();
     assert_eq!(results.len(), 1);
 
     //
 
     sd.update_dacl(|dacl| {
         dacl.remove(
-            sids.guest.as_ref(), 
-            ACEFilter::new().set_entry_type(AceType::AccessDeny)
+            sids.guest.as_ref(),
+            ACEFilter::new().set_entry_type(AceType::AccessDeny),
         )
-    }).unwrap();
+    })
+    .unwrap();
 
-    let results = sd.dacl().all_filtered(
-        sids.guest.as_ref(), 
-        None
-    ).unwrap();
+    let results = sd.dacl().all_filtered(sids.guest.as_ref(), None).unwrap();
     assert_eq!(results.len(), 2);
 
-    sd.update_dacl(|dacl| {
-        dacl.remove(
-        sids.guest.as_ref(), 
-        None
-        )
-    }).unwrap();
-
+    sd.update_dacl(|dacl| dacl.remove(sids.guest.as_ref(), None))
+        .unwrap();
 }
-
 
 #[test]
 fn my_test() {
@@ -657,30 +678,32 @@ fn my_test() {
 
     sd.take_ownership().expect("take_ownership_from_path");
     sd.read().expect("from_file_path");
-    
+
     println!("1) sd = {:#?}", &sd);
 
-    let entries = sd.iter_dacl_with_inheritance_source().expect("iter_dacl_with_inheritance_source")
-        .collect::<Vec::<_>>().expect("collect");
+    let entries = sd
+        .iter_dacl_with_inheritance_source()
+        .expect("iter_dacl_with_inheritance_source")
+        .collect::<Vec<_>>()
+        .expect("collect");
     println!("entries = {:#?}", &entries);
 
     // // sd.set_owner(sids.current_user.as_ref()).expect("set_owner");
     sd.update_dacl(|dacl| {
-        dacl.add_allow( 
-            sids.current_user.as_ref(), 
+        dacl.add_allow(
+            sids.current_user.as_ref(),
             OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
             FILE_ALL_ACCESS,
-            None
+            None,
         )?
-        .remove_any_sid(
-            ACEFilter::new().set_inherited_flag(true)
-        )
-    }).expect("update_dacl");
+        .remove_any_sid(ACEFilter::new().set_inherited_flag(true))
+    })
+    .expect("update_dacl");
 
-    sd.set_dacl_is_protected( true ).expect("set_dacl_is_protected");
+    sd.set_dacl_is_protected(true)
+        .expect("set_dacl_is_protected");
     println!("2) sd = {:#?}", &sd);
 
     sd.write().expect("write");
     println!("3) sd = {:#?}", &sd);
-
 }
